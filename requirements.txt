@@ -1,0 +1,6 @@
+# Optional decode dependencies (--game / --fspro backfill):
+# python-fsb5 (https://github.com/HearthSim/python-fsb5)
+fsb5
+# PyOgg ships libogg.dll/libvorbis.dll; already bundled in bin/, listed only
+# as the fallback source for those DLLs.
+pyogg
