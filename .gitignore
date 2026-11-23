@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*_unwrapped/
+*.fsb
+*.bank
+*.egg-info/
+build/
+dist/
+docs/EVENTS.csv
+build/
+dist/
+*.spec

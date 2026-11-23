@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rebank"
+version = "0.1.1"
+description = "ReBank: turn compiled FMOD Studio .bank files back into named samples and an editable .fspro project"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "rebank contributors" }]
+keywords = ["fmod", "fmodbank", "fsb5", "fspro", "audio", "game-audio", "war-thunder"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["rebank"]
+[project.optional-dependencies]
+decode = ["fsb5"]
+
+[project.scripts]
+rebank = "rebank:main"
+
+[project.urls]
+Homepage = "https://github.com/fuckula/rebank"
+Issues = "https://github.com/fuckula/rebank/issues"
+Changelog = "https://github.com/fuckula/rebank/releases"
+
+[tool.setuptools]
+py-modules = ["rebank"]
