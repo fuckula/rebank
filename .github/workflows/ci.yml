@@ -28,4 +28,4 @@ jobs:
       - name: Unit tests (synthetic banks, no game assets)
         run: python -m unittest discover -s tests -v
       - name: CLI smoke
-        run: fbu --help
+        run: rebank --help
