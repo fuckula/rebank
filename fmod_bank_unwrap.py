@@ -68,6 +68,21 @@ def read_varint(buf, off):
     return w, off
 
 
+def read_array(buf, off):
+    """Массив IDA-ридера sub_1800AEFB0: varint n (raw>>1), затем u16 elemSize
+    ОДИН раз (sub_1800BB510 при v5==0), затем n×elemSize байт. -> ([bytes...], new_off)"""
+    w, off = read_varint(buf, off)
+    n = w >> 1
+    if n == 0:
+        return [], off
+    es = struct.unpack_from('<H', buf, off)[0]
+    off += 2
+    end = off + es * n
+    if end > len(buf):
+        raise ValueError('array overrun: n=%d es=%d' % (n, es))
+    return [buf[off + es * i:off + es * (i + 1)] for i in range(n)], end
+
+
 # --------------------------------------------------------------- strings.bank
 
 def parse_strings_bank(path):
@@ -177,13 +192,14 @@ def parse_bank(path):
         waits.append({'ig': waib[0:16], 'wg': waib[16:32],
                       'tg': inst[0:16] if inst else None})
     muits = []    # multi instruments: playlist items -> WAIB instanceGuid
-    for rec in bank.items('LISTMUIS', b'MUIT', {b'PLST', b'INST'}):
-        plst, inst = rec.get(b'PLST'), rec.get(b'INST')
+    for rec in bank.items('LISTMUIS', b'MUIT', {b'MUIB', b'PLST', b'INST'}):
+        plst, inst, muib = rec.get(b'PLST'), rec.get(b'INST'), rec.get(b'MUIB')
         if not plst:
             continue
         cnt = struct.unpack('<H', plst[8:10])[0] >> 1
         items = [plst[12+20*i:12+20*i+16] for i in range(cnt)]
-        muits.append({'tg': inst[0:16] if inst else None, 'items': items})
+        muits.append({'tg': inst[0:16] if inst else None, 'items': items,
+                      'guid': muib[:16] if muib else None})
     wavs = []     # waveform descriptors
     sec = bank.sections.get('LISTWAVS')
     if sec:
@@ -198,6 +214,46 @@ def parse_bank(path):
                     'field': struct.unpack('<I', b[24:28])[0],
                     'sub': struct.unpack('<H', b[28:30])[0],
                 })
+    evis = []    # event instruments: (targetEventGuid, ownerTrackGuid) — вложенные события
+    for rec in bank.items('LISTEVIS', b'EVIT', {b'EVIB', b'INST'}):
+        evib, inst = rec.get(b'EVIB'), rec.get(b'INST')
+        if evib and inst:
+            evis.append((evib[16:32], inst[0:16]))
+    bank.evis = evis
+    # параметрические листы (ActionSheet): PMLB.owner — слот события на EVTB[0x5D],
+    # paramGuid — параметр (track/intense/volume), items — WAIT.ig / MUIT / scatterer.
+    # Курсор EVTB (ридер sub_1800ABC30): 0x5D varint n, затем u16 elemSize ОДИН раз,
+    # затем n×elemSize байт (sub_1800AEFB0 → sub_1800BB510(v5=0) один раз).
+    bank.params = {}     # paramGuid -> (name, min, max)
+    bank.pml = {}        # ownerGuid -> [(paramGuid, [itemGuid...]), ...]
+    bank.ev_slots = {}   # eventGuid -> [slotGuid...]
+    sec = bank.sections.get('LISTPRMS')
+    if sec:
+        for rec in bank.items('LISTPRMS', b'PARM', {b'PRMB'}):
+            bl = rec.get(b'PRMB')
+            if bl and len(bl) >= 26:
+                nlen = struct.unpack('<H', bl[24:26])[0]
+                f = struct.unpack_from('<fff', bl, 26 + nlen) if len(bl) >= 26 + nlen + 12 else (0.0, 1.0, 0.0)
+                bank.params[bl[:16]] = (bl[26:26 + nlen].decode('utf-8', 'replace'),) + f
+    sec = bank.sections.get('LISTPMLS')
+    if sec:
+        for p, cid, s, typ in walk_chunks(bank.data, sec[0] + 12, sec[0] + 8 + sec[1]):
+            if cid == b'LIST' and typ == b'PMLO':
+                for q, c2, s2, _ in walk_chunks(bank.data, p + 12, p + 8 + s):
+                    if c2 == b'PMLB':
+                        x = bank.data[q + 8:q + 8 + s2]
+                        try:
+                            items, _ = read_array(x, 32)
+                        except (ValueError, struct.error):
+                            items = []
+                        bank.pml.setdefault(x[:16], []).append((x[16:32], items))
+    for eg, body in events.items():
+        try:
+            slots, _ = read_array(body, 0x5D)
+        except (ValueError, struct.error):
+            slots = []
+        if slots:
+            bank.ev_slots[eg] = slots
     fsbs = []     # embedded FSB5 containers (SNDH -> SND offsets)
     sec = bank.sections.get('SNDH')
     if sec:
@@ -212,11 +268,26 @@ def parse_bank(path):
     return bank, events, waits, muits, wavs, fsbs
 
 
-def link_samples(events, waits, muits, wavs):
+def event_owners(events, evis):
+    """inner eventGuid -> outer eventGuid через EVIS: инструмент лежит на треке
+    outer (EVTB[0x20]/[0x40]) и играет inner (EVIB[16:32])."""
+    out2ev = {body[0x20:0x30]: eg for eg, body in events.items()}
+    master2ev = {body[0x40:0x50]: eg for eg, body in events.items()}
+    owner = {}
+    for inner, tg in evis:
+        outer = out2ev.get(tg) or master2ev.get(tg)
+        if outer and outer != inner:
+            owner[inner] = outer
+    return owner
+
+
+def link_samples(events, waits, muits, wavs, evis=()):
     """-> sample_events: (fsb, index) -> {eventGuid}, tg2ev, wg2wav.
     Инструменты (WAIT/MUIT) сидят на event-mixer треке события — в EVTB это
     outputBusGuid (0x20), у каждого события свой. Плейлисты с нулевым trackGuid
-    событиям не принадлежат (параметрические, пропускаем)."""
+    событиям не принадлежат (параметрические, пропускаем). Инструменты
+    безымянных inner-событий (EVIS) приписываются их outer-владельцу."""
+    owner = event_owners(events, evis)
     out2ev = {body[0x20:0x30]: eg for eg, body in events.items()}
     master2ev = {body[0x40:0x50]: eg for eg, body in events.items()}
     tg2ev = {}
@@ -236,10 +307,12 @@ def link_samples(events, waits, muits, wavs):
     for w in waits:
         rec = wg2wav.get(w['wg'])
         eg = tg2ev.get(w['tg']) if rec else None
+        eg = owner.get(eg, eg) if eg else None
         if rec and eg:
             sample_events[(rec[0], rec[1]['index'])].add(eg)
     for m in muits:
         eg = tg2ev.get(m['tg'])
+        eg = owner.get(eg, eg) if eg else None
         if not eg:
             continue
         for g in m['items']:
@@ -248,6 +321,27 @@ def link_samples(events, waits, muits, wavs):
             if rec:
                 sample_events[(rec[0], rec[1]['index'])].add(eg)
     return sample_events, tg2ev, wg2wav
+
+
+def instrument_keys(item, waits, muits, wg2rec, audio_map, prefix='v'):
+    """GUID инструмента из PMLB.items -> ключи сэмплов: WAIT.ig -> сэмпл,
+    MUIT (по MUIB guid или tg) -> сэмплы его плейлиста. Только те, что есть в audio_map."""
+    ig2w = {w['ig']: w for w in waits}
+    keys = []
+    w = ig2w.get(item)
+    if w:
+        rec = wg2rec.get(w['wg'])
+        if rec and (prefix, rec[0], rec[1]['index']) in audio_map:
+            keys.append((prefix, rec[0], rec[1]['index']))
+        return keys
+    for m in muits:
+        if item in (m.get('guid'), m['tg']):
+            for it in m['items']:
+                w = ig2w.get(it)
+                rec = wg2rec.get(w['wg']) if w else None
+                if rec and (prefix, rec[0], rec[1]['index']) in audio_map:
+                    keys.append((prefix, rec[0], rec[1]['index']))
+    return keys
 
 
 # ------------------------------------------------------------------ renaming
@@ -274,6 +368,8 @@ def new_guid():
 
 
 def _xml_obj(cls, oid, body=''):
+    if not body:
+        return '\t<object class="%s" id="%s" />\n' % (cls, oid)
     return '\t<object class="%s" id="%s">\n%s\t</object>\n' % (cls, oid, body)
 
 
@@ -302,7 +398,8 @@ def wav_facts(path):
 
 
 def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
-                   wg2rec, audio_map, vanilla_events=None, model='Studio.02.02.00'):
+                  wg2rec, audio_map, vanilla_events=None, evis=(), bank_obj=None,
+                  model='Studio.02.02.00'):
     """Открытый проект FMOD Studio: события с оригинальными GUID и путями из
     strings, инструменты SingleSound/MultiSound, AudioFile + Assets для wav.
     audio_map: (fsb, index) -> путь к уже извлечённому wav."""
@@ -324,7 +421,8 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
         '<?xml version="1.0" encoding="UTF-8"?>\n<objects serializationModel="%s" />\n' % model)
     open(os.path.join(meta, 'Workspace.xml'), 'w', encoding='utf-8').write(_xml(model,
         _xml_obj('Workspace', ws_g,
-            _prop('builtBanksOutputDirectory', 'Build') + _prop('builtBanksMirrorBrowserFolderHierarchy', 'true') +
+            _prop('builtBanksOutputDirectory', 'Build') + _prop('builtBanksSeparateAssets', 'true') +
+            _prop('builtBanksMirrorBrowserFolderHierarchy', 'true') +
             _rel('masterEventFolder', m_ef) + _rel('masterTagFolder', m_tf) +
             _rel('masterEffectPresetFolder', m_epf) + _rel('masterParameterPresetFolder', m_pf) +
             _rel('masterBankFolder', m_bf) + _rel('masterSandboxFolder', m_sf) +
@@ -336,7 +434,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
                  _prop('name', 'Master Bus') + _rel('effectChain', mef_chain) +
                  _rel('panner', mef_pan) + _rel('mixer', mixer_g)),
         _xml_obj('MixerBusEffectChain', mef_chain, _rel('effects', mef_fader)),
-        _xml_obj('MixerBusPanner', mef_pan, _prop('overridingOutputFormat', 2)),
+        _xml_obj('MixerBusPanner', mef_pan, _prop('overridingOutputFormat', 6)),
         _xml_obj('MixerBusFader', mef_fader)))
     open(os.path.join(meta, 'Mixer.xml'), 'w', encoding='utf-8').write(_xml(model,
         _xml_obj('Mixer', mixer_g, _rel('masterBus', master_bus) + _rel('snapshotList', snap_g))))
@@ -356,7 +454,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             _xml_obj(cls, g, _prop('name', nm) if nm else '')))
     open(os.path.join(meta, 'Platform', plat_g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
         _xml_obj('Platform', plat_g, _prop('hardwareType', 0) + _prop('name', 'Desktop') +
-                 _prop('subDirectory', 'Desktop') + _prop('speakerFormat', 5))))
+                 _prop('subDirectory', 'sound') + _prop('speakerFormat', 6))))
     enc_g = W()
     open(os.path.join(meta, 'EncodingSetting', enc_g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
         _xml_obj('EncodingSetting', enc_g, _prop('encodingFormat', 3) + _prop('quality', 37) +
@@ -366,6 +464,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
 
     # события -> инструменты (одинаковый код для своих событий и добора из ванилы)
     folder_guids = {}
+    preset_cache = {}
     audio_guids = {}
     counter = {'events': 0, 'audiofiles': 0}
 
@@ -383,10 +482,24 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             parent = folder_guids[acc]
         return parent
 
+    asset_dirs = {}
+
+    def ensure_asset_dir(rel_dir):
+        """Папка в Assets/ -> EncodableAsset (иначе дерево ассетов в Studio пустое)."""
+        if not rel_dir or rel_dir in asset_dirs:
+            return
+        ensure_asset_dir(os.path.dirname(rel_dir).replace('\\', '/'))
+        g = W()
+        asset_dirs[rel_dir] = g
+        open(os.path.join(meta, 'Asset', g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+            _xml_obj('EncodableAsset', g, _prop('assetPath', rel_dir + '/') +
+                     _rel('masterAssetFolder', m_af))))
+
     def sound_guid(epath, key, audio_map):
         if key not in audio_guids:
             ag = W()
             rel_path = epath.replace('event:/', '') + '/%03d.wav' % key[2]
+            ensure_asset_dir(os.path.dirname(rel_path))
             dst = os.path.join(out_dir, 'Assets', *rel_path.split('/'))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             src = audio_map[key]
@@ -411,70 +524,116 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
         """ev_waits: [(key)], ev_multi: [[key], ...] — уже собранные ключи сэмплов."""
         parts = epath.replace('event:/', '').strip('/').split('/')
         parent = ensure_folder(parts[:-1])
-        emix, mtrk, minp, aprops, mtrk2, gtrk, tline = (W() for _ in range(7))
-        emaster, ichain, ipan, ggrp, gchain, gpan = (W() for _ in range(6))
-        f1, f2, f3 = W(), W(), W()
+        emix, mtrk, minp, aprops, mtrk2, tline = (W() for _ in range(6))
+        emaster, ichain, ipan, gchain, gpan = (W() for _ in range(5))
+        f1, f2 = W(), W()
         sounds_xml = ''
-        single_dests, multi_groups = [], []
-        for key in ev_waits:
-            sg = W()
-            single_dests.append(sg)
-            sounds_xml += _xml_obj('SingleSound', sg,
-                _prop('triggerProbabilityEnabled', 'true') + _rel('audioFile', sound_guid(epath, key, audio_map)))
-        for grp in ev_multi:
+        multi_groups = []
+        for keys in ([ev_waits] if ev_waits else []) + list(ev_multi):
+            # каждый сэмпл — SingleSound; все сэмплы одной группы уходят в один
+            # MultiSound-плейлист, иначе «лишние» SingleSound остаются без
+            # владельца (dangling) и Studio помечает событие как malformed
             mg = W()
             multi_groups.append(mg)
             gdests = []
-            for key in grp:
+            for key in keys:
                 sg = W()
                 gdests.append(sg)
                 sounds_xml += _xml_obj('SingleSound', sg,
-                    _prop('triggerProbabilityEnabled', 'true') + _rel('audioFile', sound_guid(epath, key, audio_map)))
-            sounds_xml += _xml_obj('MultiSound', mg, _prop('name', parts[-1]) +
-                                   _prop('playlistMode', 2) + _rel('sounds', *gdests))
-        gtrk_mods = ([single_dests[0]] if single_dests else []) + multi_groups
-        mods_rel = _rel('modules', *gtrk_mods) if gtrk_mods else ''
+                    _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
+                    _rel('audioFile', sound_guid(epath, key, audio_map)))
+            sounds_xml += _xml_obj('MultiSound', mg, _rel('sounds', *gdests))
+        mods_rel = _rel('modules', *multi_groups) if multi_groups else ''
+        params_rel = ''
+        # параметрический лист (ActionSheet): EVTB[0x5D] слоты -> PMLB(owner) ->
+        # параметр + инструменты. Каждый слот = свой диапазон параметра
+        # (ParameterCondition) и свой MultiSound; всё вешается на ParameterProxy.
+        slots = bank_obj.ev_slots.get(eg, []) if bank_obj else []
+        if slots:
+            sheets = [(pg, items) for s in slots for pg, items in bank_obj.pml.get(s, [])]
+            if sheets:
+                pg = sheets[0][0]
+                pname, pmin, pmax = bank_obj.params.get(pg, (guid_str(pg), 0.0, 1.0))
+                if pg not in preset_cache:
+                    gparam, gpreset = W(), W()
+                    preset_cache[pg] = (gparam, gpreset)
+                    open(os.path.join(meta, 'ParameterPreset', gpreset + '.xml'), 'w',
+                         encoding='utf-8').write(_xml(model,
+                        _xml_obj('ParameterPreset', gpreset, _prop('name', pname) +
+                                 _rel('folder', m_pf) + _rel('parameter', gparam)),
+                        _xml_obj('GameParameter', gparam,
+                                 _prop('initialValue', '%g' % pmin) +
+                                 _prop('minimum', '%g' % pmin) + _prop('maximum', '%g' % pmax) +
+                                 _prop('isExposedRecursively', 'false'))))
+                gparam, gpreset = preset_cache[pg]
+                proxy = W()
+                proxy_mods = []
+                step = (pmax - pmin) / float(len(slots)) if len(slots) > 1 else 1.0
+                for si, s in enumerate(slots):
+                    keys = []
+                    for _pg, items in bank_obj.pml.get(s, []):
+                        for it in items:
+                            keys.extend(instrument_keys(it))
+                    if not keys:
+                        continue
+                    mg = W()
+                    proxy_mods.append(mg)
+                    gdests = []
+                    for key in keys:
+                        sg = W()
+                        gdests.append(sg)
+                        sounds_xml += _xml_obj('SingleSound', sg,
+                            _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
+                            _rel('audioFile', sound_guid(epath, key, audio_map)))
+                    cond = W()
+                    lo = pmin + step * si
+                    sounds_xml += _xml_obj('ParameterCondition', cond,
+                        _prop('minimum', '%g' % lo) + _prop('maximum', '%g' % (lo + step)) +
+                        _rel('parameter', gparam))
+                    sounds_xml += _xml_obj('MultiSound', mg,
+                        _rel('triggerConditions', cond) + _rel('sounds', *gdests))
+                if proxy_mods:
+                    sounds_xml += _xml_obj('ParameterProxy', proxy,
+                        _rel('modules', *proxy_mods) + _rel('preset', gpreset))
+                    params_rel = _rel('parameters', proxy)
         open(os.path.join(meta, 'Event', guid_str(eg) + '.xml'), 'w', encoding='utf-8').write(_xml(model,
             _xml_obj('Event', guid_str(eg), _prop('name', parts[-1]) + _prop('outputFormat', 2) +
                      _rel('folder', parent) + _rel('mixer', emix) + _rel('masterTrack', mtrk) +
                      _rel('mixerInput', minp) + _rel('automatableProperties', aprops) +
-                     _rel('markerTracks', mtrk2) + _rel('groupTracks', gtrk) + _rel('timeline', tline) +
-                     _rel('banks', bank_g)),
+                     _rel('markerTracks', mtrk2) + _rel('timeline', tline) +
+                     params_rel + _rel('banks', bank_g)),
             _xml_obj('EventMixer', emix, _rel('masterBus', emaster)),
-            _xml_obj('MasterTrack', mtrk, _rel('mixerGroup', emaster)),
+            _xml_obj('MasterTrack', mtrk, mods_rel + _rel('mixerGroup', emaster)),
             _xml_obj('MixerInput', minp, _rel('effectChain', ichain) + _rel('panner', ipan) +
                      _rel('output', master_bus)),
             _xml_obj('EventAutomatableProperties', aprops),
             _xml_obj('MarkerTrack', mtrk2),
-            _xml_obj('GroupTrack', gtrk, mods_rel + _rel('mixerGroup', ggrp)),
-            _xml_obj('Timeline', tline),
+            _xml_obj('Timeline', tline, mods_rel),
             _xml_obj('EventMixerMaster', emaster, _rel('effectChain', gchain) +
                      _rel('panner', gpan) + _rel('mixer', emix)),
             _xml_obj('MixerBusEffectChain', ichain, _rel('effects', f1)),
             _xml_obj('MixerBusPanner', ipan),
-            _xml_obj('EventMixerGroup', ggrp, _prop('name', 'Audio 1') +
-                     _rel('effectChain', gchain) + _rel('panner', gpan) +
-                     _rel('output', emaster)),
             _xml_obj('MixerBusEffectChain', gchain, _rel('effects', f2)),
             _xml_obj('MixerBusPanner', gpan),
             _xml_obj('MixerBusFader', f1),
             _xml_obj('MixerBusFader', f2),
-            _xml_obj('MixerBusFader', f3),
-            sounds_xml.rstrip('\n')))
+            sounds_xml))
         counter['events'] += 1
+
+    ev_owner = event_owners(events, evis)
 
     def collect(eg, waits, muits, tg2ev, wg2rec, audio_map):
         """-> (single_keys, [multi_key_groups]) события eg."""
         singles = []
         for w in waits:
-            if tg2ev.get(w['tg']) != eg:
+            if ev_owner.get(tg2ev.get(w['tg']), tg2ev.get(w['tg'])) != eg:
                 continue
             rec = wg2rec.get(w['wg'])
             if rec and ('v', rec[0], rec[1]['index']) in audio_map:
                 singles.append(('v', rec[0], rec[1]['index']))
         multis = []
         for m in muits:
-            if tg2ev.get(m['tg']) != eg:
+            if ev_owner.get(tg2ev.get(m['tg']), tg2ev.get(m['tg'])) != eg:
                 continue
             grp = []
             for it in m['items']:
@@ -507,23 +666,33 @@ def decode_game_fsbs(assets_path, out_root):
     except ImportError:
         print('!! python-fsb5 не установлен — положите ванильные wav и укажите --game-wav')
         return {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for src_dir in (os.path.join(here, 'bin'),):
+        for dll in ('libogg.dll', 'libvorbis.dll'):
+            src = os.path.join(src_dir, dll)
+            if os.path.exists(src) and not os.path.exists(os.path.join(os.getcwd(), dll)):
+                try:
+                    shutil.copy2(src, dll)
+                except OSError:
+                    pass
     try:
         import pyogg
-        here = os.path.dirname(os.path.abspath(__file__))
         for dll in ('libogg.dll', 'libvorbis.dll'):
             src = os.path.join(os.path.dirname(pyogg.__file__), dll)
-            if os.path.exists(src) and not os.path.exists(os.path.join(here, dll)):
-                shutil.copy2(src, os.path.join(here, dll))
+            if os.path.exists(src) and not os.path.exists(os.path.join(here, 'bin', dll)):
+                shutil.copy2(src, os.path.join(here, 'bin', dll))
+                shutil.copy2(src, dll)
     except ImportError:
         pass
     from enum import IntEnum
-    _ext = fsb5.SoundFormat.file_extension.fget
-    _pcm = fsb5.SoundFormat.is_pcm.fget
-    NewSF = IntEnum('SoundFormat',
-                    [(m.name, m.value) for m in fsb5.SoundFormat] + [('FADPCM', 16)])
-    NewSF.file_extension = property(lambda s: 'wav' if s.value == 16 else _ext(s))
-    NewSF.is_pcm = property(lambda s: s.value == 16 or _pcm(s))
-    fsb5.SoundFormat = NewSF
+    members = [(m.name, m.value) for m in fsb5.SoundFormat]
+    if 'FADPCM' not in fsb5.SoundFormat.__members__:
+        _ext = fsb5.SoundFormat.file_extension.fget
+        _pcm = fsb5.SoundFormat.is_pcm.fget
+        NewSF = IntEnum('SoundFormat', members + [('FADPCM', 16)])
+        NewSF.file_extension = property(lambda s: 'wav' if s.value == 16 else _ext(s))
+        NewSF.is_pcm = property(lambda s: s.value == 16 or _pcm(s))
+        fsb5.SoundFormat = NewSF
     _, _, _, _, _, fsbs = parse_bank(assets_path)
     data = open(assets_path, 'rb').read()
     base = os.path.splitext(os.path.basename(assets_path))[0]
@@ -538,7 +707,7 @@ def decode_game_fsbs(assets_path, out_root):
             except Exception as e:
                 print('  !! decode %s[%d] #%d: %s' % (base, i, n, e))
                 continue
-            ext = NewSF(int(bank.header.mode)).file_extension
+            ext = fsb5.SoundFormat(int(bank.header.mode)).file_extension
             path = os.path.join(outdir, 'sound_%d.%s' % (n, ext))
             open(path, 'wb').write(blob)
             out[('g', i, n)] = path
@@ -621,7 +790,7 @@ def main():
     print('bank %s fmt=%#x: events=%d single=%d multi=%d waveforms=%d fsb=%d' %
           (bank.name, bank.fmt_version, len(events), len(waits), len(muits), len(wavs), len(fsbs)))
 
-    sample_events, tg2ev, wg2rec = link_samples(events, waits, muits, wavs)
+    sample_events, tg2ev, wg2rec = link_samples(events, waits, muits, wavs, getattr(bank, 'evis', ()))
     named = sum(1 for v in sample_events.values() if v)
     print('samples referenced: %d, named: %d' % (len(sample_events), named))
 
@@ -638,7 +807,10 @@ def main():
                 m = re.match(r'sound_(\d+)\.wav$', f)
                 if m:
                     audio_map.setdefault(('v', d_idx, int(m.group(1))), os.path.join(d, f))
-        # добор недостающих событий из ванильного банка игры
+        if not audio_map and fsbs:
+            # своих wav нет (Fmod Bank Tools не прогоняли) — декодируем сами
+            audio_map = decode_game_fsbs(bank_path, out_root)
+            audio_map = {('v', k[1], k[2]): v for k, v in audio_map.items()}
         if args.game:
             gbank = os.path.join(args.game, os.path.basename(bank_path))
             gassets = os.path.splitext(gbank)[0] + '.assets.bank'
@@ -652,7 +824,7 @@ def main():
                 for wrec in gw:
                     seen[wrec['index']] += 1
                     gwg2[wrec['guid']] = (seen[wrec['index']] - 1, wrec)
-                _, gtg2ev, _ = link_samples(gevents, gwaits, gmuits, gw)
+                _, gtg2ev, _ = link_samples(gevents, gwaits, gmuits, gw, getattr(Bank(gbank), 'evis', ()))
                 local_paths = {strings.get(e) for e in events}
                 n_fill = 0
                 # ванильные wav/ogg: папки --game-wav (по числу FSB assets-банка);
@@ -791,7 +963,7 @@ def main():
         fspro_dir = os.path.join(out_root, 'fspro')
         info = generate_fspro(fspro_dir, bank.name.replace('.assets', '') or 'project',
                               events, strings, waits, muits, tg2ev, wg2rec, audio_map,
-                              vanilla_events=vanilla_events)
+                              vanilla_events=vanilla_events, evis=getattr(bank, 'evis', ()))
         print('fspro: %(fspro)s (events=%(events)d, audiofiles=%(audiofiles)d, '
               'events_without_name=%(events_without_name)d)' % info)
 
