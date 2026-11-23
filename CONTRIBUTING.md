@@ -28,7 +28,7 @@ find another way (hex dumps of a few dozen bytes are fine).
 ## Development setup
 
 ```sh
-git clone https://github.com/OWNER/rebank
+git clone https://github.com/fuckula/rebank
 cd rebank
 pip install -e ".[decode]"
 ruff check .

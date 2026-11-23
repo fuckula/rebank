@@ -1,6 +1,6 @@
 # ReBank
 
-[![CI](https://github.com/OWNER/rebank/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/rebank/actions/workflows/ci.yml)
+[![CI](https://github.com/fuckula/rebank/actions/workflows/ci.yml/badge.svg)](https://github.com/fuckula/rebank/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/rebank)](https://pypi.org/project/rebank/)
 [![Python](https://img.shields.io/pypi/pyversions/rebank)](https://pypi.org/project/rebank/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -46,7 +46,7 @@ pip install "rebank[decode]"  # + FSB5 decoding (Vorbis / FADPCM) via python-fsb
 ```
 
 Windows users without Python: grab `rebank-<version>-windows.zip` from
-[Releases](https://github.com/OWNER/rebank/releases) — a
+[Releases](https://github.com/fuckula/rebank/releases) — a
 self-contained `rebank.exe`.
 
 `ffmpeg` on `PATH` is needed only when decoded samples are Ogg (FMOD Studio

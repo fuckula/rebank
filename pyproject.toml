@@ -46,9 +46,9 @@ decode = ["fsb5"]
 rebank = "rebank:main"
 
 [project.urls]
-Homepage = "https://github.com/OWNER/rebank"
-Issues = "https://github.com/OWNER/rebank/issues"
-Changelog = "https://github.com/OWNER/rebank/releases"
+Homepage = "https://github.com/fuckula/rebank"
+Issues = "https://github.com/fuckula/rebank/issues"
+Changelog = "https://github.com/fuckula/rebank/releases"
 
 [tool.setuptools]
 py-modules = ["rebank"]
