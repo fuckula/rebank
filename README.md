@@ -1,93 +1,189 @@
-# fmod-bank-unwrap
+# ReBank
 
-Unwrap compiled FMOD Studio `.bank` files (FEV container, FMOD Studio 2.0x /
-format version 0x8C–0x8E) back into named audio and an editable FMOD Studio
-project.
+[![CI](https://github.com/OWNER/rebank/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/rebank/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/rebank)](https://pypi.org/project/rebank/)
+[![Python](https://img.shields.io/pypi/pyversions/rebank)](https://pypi.org/project/rebank/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Banks do not store names. This tool rebuilds the chain:
+**Turn compiled FMOD Studio `.bank` files back into named audio samples and an
+editable FMOD Studio project.**
+
+A bank stores GUIDs, not names. ReBank rebuilds the chain
+`strings.bank → events → instruments → waveforms → FSB5 samples`, so every
+sample lands under its real event path (`aircraft/gui/alarm_radar_an_alr_56/001.wav`)
+and every event comes back with its original name, GUID and game parameters —
+ready to open in FMOD Studio 2.02, edit and Build again.
+
+Built for War Thunder sound modders (vanilla backfill, RWR/GUI banks,
+`--diff` against the installed game), works with any FMOD Studio 2.0x bank
+(format `0x8C`–`0x8E`).
 
 ```
 masterbank.strings.bank   (STDT radix-trie: GUID -> event:/ bus:/ path)
         |
-EVTS / EVTB              (event: GUID, event-mixer track at 0x20)
+EVTS / EVTB              (event GUID, instrument track, parameter sheets)
         |
-WAIS / MUIS instruments  (trackGuid -> waveformGuid)
+WAIS / MUIS instruments  (trackGuid / parameter sheet -> waveformGuid)
         |
 WAVS / WAV               (waveformGuid -> sample index; a repeated index
         |                  belongs to the next FSB container)
         v
-sound_N.wav  ->  aircraft/gui/000_focus.wav
+sound_N.wav  ->  aircraft/gui/000_focus.wav  ->  fspro project
 ```
 
-## Features
+> **Created with AI assistance.** This project was designed and written by an
+> AI coding assistant under human direction; the bank format was verified
+> against real files. Please review the code before relying on it for
+> anything important.
 
-| Command | What it does |
-|---|---|
-| default | Parses the bank, writes `<bank>_samples.csv` (sample -> events map) and `<bank>_names.json` |
-| `--rename-dir DIR...` | Copies decoded `sound_N.wav` folders (Fmod Bank Tools output) into an event-path tree `aircraft/gui/000_focus.wav` |
-| `--diff GAME_DIR` | Report: which events your bank is missing vs the current game install |
-| `--fspro` | Generates a **FMOD Studio project** (`<out>/fspro/<bank>.fspro`): events with original GUIDs (game-compatible), SingleSound/MultiSound instruments, `ParameterProxy` sheets for parameter-driven events (RWR tones etc.), `Assets/` audio — open, edit, Build |
-| `--game GAME_DIR` | Backfills events missing from your bank using the game's vanilla bank pair (`X.bank` + `X.assets.bank`), including their parameter sheets, decoding FSB5 samples (Vorbis/FADPCM) on the fly |
-| `-a X.assets.bank` | Vanilla-style banks where events and samples live in separate files |
+## Install
 
-Deps: `pip install -r requirements.txt` (+ `ffmpeg` on PATH for Ogg->WAV
-conversion; DLL fallback `bin/libogg.dll`, `bin/libvorbis.dll`).
+Core has **no dependencies** (Python ≥ 3.10, standard library only).
+
+```sh
+pip install rebank            # parsing, reports, project from existing wav
+pip install "rebank[decode]"  # + FSB5 decoding (Vorbis / FADPCM) via python-fsb5
+```
+
+Windows users without Python: grab `rebank-<version>-windows.zip` from
+[Releases](https://github.com/OWNER/rebank/releases) — a
+self-contained `rebank.exe`.
+
+`ffmpeg` on `PATH` is needed only when decoded samples are Ogg (FMOD Studio
+imports PCM wav).
 
 ## Usage
 
-```bat
-REM 1) name-tag samples (decode first with Fmod Bank Tools if you have its wav folders)
-python fmod_bank_unwrap.py RWSM\aircraft_gui.bank ^
-    --rename-dir "FMOD Bank Tools\wav\aircraft_gui[0]" ^
-    --rename-dir "FMOD Bank Tools\wav\aircraft_gui[1]" --apply
+`$WT` below is the War Thunder installation folder (`…/War Thunder`). Omit
+`--apply` to get reports only.
 
-REM 2) diff against the installed game
-python fmod_bank_unwrap.py RWSM\aircraft_gui.bank ^
-    --diff "C:\...\War Thunder\sound"
-
-REM 3) editable FMOD Studio project + backfill missing sounds from vanilla
-python fmod_bank_unwrap.py RWSM\aircraft_gui.bank ^
-    --rename-dir "FMOD Bank Tools\wav\aircraft_gui[0]" ^
-    --rename-dir "FMOD Bank Tools\wav\aircraft_gui[1]" ^
-    --fspro --game "C:\...\War Thunder\sound" --apply
+**A. Inspect a bank without extracting anything**
+```sh
+rebank weapon_turret.bank
 ```
+Reads `masterbank.strings.bank` next to it, writes `weapon_turret_samples.csv`
+(which event plays which sample) and `weapon_turret_names.json`. Nothing else
+is touched.
 
-Then open `<out>\fspro\<bank>.fspro` in FMOD Studio 2.02.22, edit, Build.
+**B. Rebuild a mod author's bank into a Studio project (single-file layout)**
+```sh
+rebank RWSM/aircraft_gui.bank --fspro --apply
+```
+The mod bank embeds its FSB5 containers; samples are decoded with
+`[decode]`, placed under `fspro/Assets/<event path>/`, and the project opens
+with the mod's event names and GUIDs.
 
-## Verified against (War Thunder, 2026-11)
+**C. Vanilla game bank (split layout) with names from the game**
+```sh
+rebank "$WT/sound/aircraft_gui.bank" -a "$WT/sound/aircraft_gui.assets.bank" \
+    -s "$WT/sound/masterbank.strings.bank" --fspro --apply
+```
+Events live in `X.bank`, samples in `X.assets.bank`; `-s` points at the game's
+string dictionary.
 
-- RWSM mod banks (single-file layout): 330 events / 378 samples unwrapped,
-  249 named via `masterbank.strings.bank`.
-- Vanilla game banks (split `X.bank` + `X.assets.bank`): 311 events / 408
-  samples; `--fspro --game` merges both sources into one 311-event project.
-- 55 RWSM-only events have no strings entry (mod author's custom actions);
-  19 remain unnamed by design — names only exist in the mod's source project.
+**D. Mod bank + fill the gaps from the game**
+```sh
+rebank RWSM/aircraft_gui.bank --fspro --game "$WT/sound" --apply
+```
+Every event the mod lacks (or leaves without instruments — e.g. RWR alarm
+tones) is taken from the vanilla bank pair, samples copied to
+`_from_vanilla/`, parameter sheets (`track`/`volume`/…) preserved. The result
+is a complete project you can build as a drop-in replacement.
 
-## Parameter sheets (ActionSheet → ParameterProxy)
+**E. Use wav files extracted by another tool instead of decoding**
+```sh
+rebank my.bank --fspro \
+    --rename-dir "FMOD Bank Tools/wav/my[0]" \
+    --rename-dir "FMOD Bank Tools/wav/my[1]" --apply
+```
+No `[decode]` extra needed; folders are matched to FSB containers in order.
 
-Event bodies carry a slot array at `EVTB+0x5D` (varint count, one `u16`
-element size, then `n × 16`-byte owner GUIDs — layout verified against the
-bank reader in `fmodstudio64.dll`). Each owner GUID names a `PMLB` record:
-`(paramGuid, [instrumentGuids])`. Slots of one event may drive **different**
-game parameters (`track`, `volume`, `launch`, `new` for RWR alarms), and
-several `PMLB` records may share a parameter. The project maps this to
-`Event.parameters → ParameterProxy(preset) → modules → MultiSound(items)`,
-one proxy per parameter, no trigger conditions (the bank stores none in
-`CTRO`). Parameters without any resolvable instrument are omitted rather
-than guessed. Nested events (`LISTEVIS`) are attributed to their outer
-named event.
+**F. Keep a mod up to date with game patches**
+```sh
+rebank RWSM/aircraft_gui.bank --diff "$WT/sound"
+```
+Writes `RWSM_vs_vanilla_report.txt`: events added or removed in the game
+since the bank was built.
 
-Still not exported: mixer buses, snapshots, automation curves, transition
-regions (`TRNS/TRAN`). Events with zero instruments stay empty — that is
-a bank fact, not a parser gap (all 24 `alarm_radar_*` events have four
-parameter sheets in vanilla; the mod bank leaves them without items).
+**G. Several banks at once**
+```sh
+for b in "$WT/sound/"{tanks,weapons,aircraft}.bank; do
+  rebank "$b" -a "${b%.bank}.assets.bank" --fspro --apply
+done
+```
+Each bank becomes its own `fspro/` project.
 
-## Credits
+## Output
 
-- Bank format reverse-engineering: [wheatleyinspace/fmod-bank-tools](https://github.com/wheatleyinspace/fmod-bank-tools) specifications.
-- FSB5 decode: [HearthSim/python-fsb5](https://github.com/HearthSim/python-fsb5); Ogg/Vorbis libs via [TeamPyOgg/PyOgg](https://github.com/TeamPyOgg/PyOgg) (bundled in `bin/`).
-- Reference project structure: [GaijinEntertainment/fmod_studio_warthunder_for_modders](https://github.com/GaijinEntertainment/fmod_studio_warthunder_for_modders).
+Output (`<bank>_unwrapped/` by default):
+
+| Path | Content |
+|---|---|
+| `<bank>_samples.csv` | sample -> events map |
+| `<bank>_names.json` | event GUID -> name |
+| `fspro/<bank>.fspro` | FMOD Studio project (`--fspro`) |
+| `fspro/Assets/<event path>/NNN.wav` | samples placed under their event path |
+| `_from_vanilla/` | samples borrowed from the game bank (`--game`) |
+
+## Tested against
+
+Verified with the official War Thunder modding project
+[`GaijinEntertainment/fmod_studio_warthunder_for_modders`](https://github.com/GaijinEntertainment/fmod_studio_warthunder_for_modders)
+at the **Sky Odyssey update (16 Sep 2026)** — FMOD Studio **2.02.22**,
+`serializationModel="Studio.02.02.00"`. Banks: `aircraft_gui` mod bank
+(330 events / 378 samples) and vanilla split pair (311 events / 408
+samples). Bank format `fmt=0x8E`. Older FMOD 2.0x banks (`0x8C`/`0x8D`)
+parse with the same code path but were not exercised.
+
+## Options
+
+| Option | Meaning |
+|---|---|
+| `-s, --strings PATH` | `*.strings.bank` (default: `masterbank.strings.bank` next to the bank) |
+| `-a, --assets PATH` | paired `X.assets.bank` holding the samples (split layout) |
+| `-o, --out DIR` | output root (default: `<bank>_unwrapped`) |
+| `--csv PATH`, `--json PATH` | custom report paths |
+| `--rename-dir DIR` (repeat) | folders with pre-extracted `sound_N.wav`, one per FSB |
+| `--fsb-dir DIR` | folder with cut-out `.fsb` files |
+| `--fspro` | generate the FMOD Studio project |
+| `--game DIR` | backfill missing events from a game sound dir (with `--fspro`) |
+| `--game-wav DIR` (repeat) | pre-extracted vanilla `sound_N.wav` instead of decoding |
+| `--diff DIR` | report differences against a game sound dir |
+| `--apply` | write files (default: reports only) |
+
+## What the project keeps
+
+- Event names, paths and GUIDs (game-compatible).
+- Single instruments as `SingleSound`, playlists as `MultiSound`.
+- Parameter sheets (`track`, `volume`, `on_shot`, …) as `ParameterProxy`
+  modules per game parameter, with the original parameter names.
+- Nested events merged into their named outer event.
+
+## Limitations
+
+- Mixer buses, snapshots, automation curves and transition regions are not
+  reconstructed; the project targets a flat master bus.
+- Events with no resolvable instrument stay empty — the bank has nothing
+  to play for them.
+- Banks without a `strings.bank` yield unnamed events (names live only in
+  the author's source project).
+- FMOD Studio 2.02 project model (`serializationModel="Studio.02.02.00"`).
+
+## War Thunder notes
+
+Built and verified against War Thunder banks (FMOD Studio **2.02.22**).
+When shipping a sound mod, the game requires event names, folder layout,
+bank names and mixer bus structure to stay identical to the official
+project — change the *content* of events, not their identity.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports that include the bank
+format version (`fmt=0x8C/0x8D/0x8E` printed by the tool) are the most
+useful. **Do not attach game banks** — they are proprietary.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE). Not affiliated with Firelight Technologies or Gaijin
+Entertainment. Bundled `libogg`/`libvorbis` DLLs are under their own BSD-style
+licenses, see [NOTICE](NOTICE).

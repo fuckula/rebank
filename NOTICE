@@ -1,0 +1,25 @@
+NOTICE
+======
+
+fmod-bank-unwrap is licensed under the MIT License (see LICENSE).
+
+This product is not affiliated with, endorsed by, or sponsored by
+Firelight Technologies Pty Ltd (FMOD) or Gaijin Entertainment (War Thunder).
+FMOD is a trademark of Firelight Technologies Pty Ltd.
+
+Third-party components
+----------------------
+
+bin/libogg.dll, bin/libvorbis.dll
+  Copyright (c) Xiph.Org Foundation and contributors.
+  Distributed under the BSD-style licenses of the Ogg and Vorbis projects:
+  https://www.xiph.org/licenses/ (BSD 3-clause style).
+  Used at runtime by the optional FSB5 decoding extra
+  (python-fsb5 -> pyogg) for Vorbis samples. They are not linked into the
+  Python code; remove them if you do not use `--fspro`/`--game` decoding.
+
+Optional Python dependencies (installed only on request)
+--------------------------------------------------------
+
+python-fsb5  https://github.com/HearthSim/python-fsb5  (MIT)
+pyogg       https://github.com/TeamPyOgg/PyOgg         (BSD-style; source of the DLLs above)

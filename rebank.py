@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 """
-fmod_bank_unwrap.py — разбор FMOD Studio .bank (FEV) с сохранением имён событий.
+rebank — rebuild FMOD Studio .bank (FEV) files into named samples and an editable project.
 
-Идея: банк не хранит имена аудиофайлов. Имена восстанавливаются цепочкой
-  strings.bank (GUID->путь) -> EVTB (событие) -> трек -> WAIT/MUIT (инструмент)
-  -> WAIB (waveform) -> WAV (индекс сэмпла) -> FSB5 sound_N
-и файлы раскладываются/переименовываются в <путь события>/<индекс>_<имя>.wav
+Banks do not store sample names. Names are rebuilt through the chain
+  strings.bank (GUID -> path) -> EVTB (event) -> track -> WAIT/MUIT (instrument)
+  -> WAIB (waveform) -> WAV (sample index) -> FSB5 sound_N
+and samples are laid out as <event path>/<index>_<name>.wav.
 
-Использование:
-  python fmod_bank_unwrap.py BANK.bank [опции]
+Usage:
+  rebank BANK.bank [options]         (or: python rebank.py ...)
 
-Опции:
-  -s, --strings PATH     *.strings.bank (по умолчанию masterbank.strings.bank рядом)
-  -o, --out DIR          корень вывода (по умолчанию <bank>_unwrapped)
-  --csv PATH             CSV-отчёт (по умолчанию <out>/<bank>_samples.csv)
-  --rename-dir DIR       папка с уже извлечёнными sound_N.wav (повторять по числу
-                         FSB: сначала [0], потом [1]); с --apply файлы копируются
-                         в дерево событий
-  --fsb-dir DIR          папка с вырезанными .fsb (сохранить как <out>/fsb/N.fsb)
-  --apply                выполнять копирование (без неё только отчёт)
-  --json PATH            сохранить карту имён (по умолчанию <out>/<bank>_names.json)
+Options:
+  -s, --strings PATH     *.strings.bank (default: masterbank.strings.bank next to the bank)
+  -a, --assets PATH      paired X.assets.bank holding the samples (split-bank layout)
+  -o, --out DIR          output root (default: <bank>_unwrapped)
+  --csv PATH             sample -> events report (default: <out>/<bank>_samples.csv)
+  --json PATH            name map (default: <out>/<bank>_names.json)
+  --rename-dir DIR       folder with pre-extracted sound_N.wav (repeat per FSB: [0], [1], ...)
+  --fsb-dir DIR          folder with cut-out .fsb files (saved as <out>/fsb/N.fsb)
+  --fspro                generate an FMOD Studio project (<out>/fspro/<bank>.fspro)
+  --game DIR             backfill events missing from your bank from the game's sound dir
+  --game-wav DIR         pre-extracted vanilla sound_N.wav folders (alternative to decoding)
+  --diff DIR             report: compare against the game's sound dir
+  --apply                write files (without it only reports are written)
 
-Пример (War Thunder):
-  python fmod_bank_unwrap.py RWSM/aircraft_gui.bank ^
-      --rename-dir "FMOD Bank Tools/wav/aircraft_gui[0]" ^
-      --rename-dir "FMOD Bank Tools/wav/aircraft_gui[1]" --apply
+Example:
+  fbu RWSM/aircraft_gui.bank --fspro --game "C:/.../War Thunder/sound" --apply
 """
 import argparse
 import csv
@@ -33,7 +34,6 @@ import os
 import re
 import shutil
 import struct
-import sys
 import subprocess
 import uuid
 import wave
@@ -99,34 +99,29 @@ def parse_strings_bank(path):
     if stdt is None:
         raise ValueError('STDT chunk not found: %s' % path)
     off = 4
-    nv, off = read_varint(stdt, off)
-    n = nv >> 1
-    off += 2
+    # те же массивы, что в EVTB: varint n, затем u16 elemSize ОДИН раз, затем n*es
+    nodes_raw, off = read_array(stdt, off)
     nodes = []
-    for _ in range(n):
-        v1 = struct.unpack('<I', stdt[off:off+4])[0]
-        v2 = struct.unpack('<I', stdt[off+4:off+8])[0]
+    for raw in nodes_raw:
+        v1, v2 = struct.unpack('<II', raw[:8])
         nodes.append((v1 & 0xFFFFFF, v2 & 0xFFFFFF, (v2 >> 24) & 0xFF))
-        off += 8
-    gv, off = read_varint(stdt, off)
-    g = gv >> 1
-    off += 2
-    guids = [stdt[off+16*i:off+16*i+16] for i in range(g)]
-    off += 16 * g
+    guids_raw, off = read_array(stdt, off)
+    guids = [bytes(raw[:16]) for raw in guids_raw]
     sl, off = read_varint(stdt, off)
     pool = stdt[off:off+sl]
     off += sl
-    mc, off = read_varint(stdt, off)
-    off += mc * 3
-    pc, off = read_varint(stdt, off)
-    parents = []
-    for _ in range(pc):
-        b3 = stdt[off:off+3]
-        v = b3[0] | (b3[1] << 8) | (b3[2] << 16)
-        parents.append(v if v != 0xFFFFFF else -1)
-        off += 3
+    # хвост: два массива по u16 count + count×3 байта (без varint/elemSize):
+    # guid -> node, затем node -> parent (0xFFFFFF = корень)
+    def u24_at(o):
+        return stdt[o] | (stdt[o+1] << 8) | (stdt[o+2] << 16)
+    mc = struct.unpack_from('<H', stdt, off)[0]
+    off += 2 + mc * 3
+    pc = struct.unpack_from('<H', stdt, off)[0]
+    off += 2
+    parents = [u24_at(off + 3*i) for i in range(pc)]
+    parents = [v if v != 0xFFFFFF else -1 for v in parents]
     out = {}
-    for idx, (so, cg, cc) in enumerate(nodes):
+    for idx, (_so, cg, cc) in enumerate(nodes):
         if cc == 0 and idx != 0:
             segs, cur = [], idx
             while cur != -1:
@@ -740,26 +735,31 @@ def diff_against(bank_path, game_dir, strings):
     return '\n'.join(lines)
 def main():
     ap = argparse.ArgumentParser(
-        description='FMOD .bank unwrap: имена событий -> раскладка сэмплов',
-        formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split('Опции:')[-1])
-    ap.add_argument('bank')
-    ap.add_argument('-s', '--strings')
+        prog='rebank',
+        description='Unwrap FMOD Studio .bank files: rebuild event names, lay out samples, '
+                    'generate an editable FMOD Studio project.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='example:\n  rebank aircraft_gui.bank --fspro --game "C:/Games/War Thunder/sound" --apply')
+    ap.add_argument('bank', help='FMOD Studio .bank (FEV) file')
+    ap.add_argument('-s', '--strings', help='*.strings.bank (default: masterbank.strings.bank next to the bank)')
     ap.add_argument('-a', '--assets',
-                    help='парный X.assets.bank с сэмплами (формат ванильных банков игры)')
-    ap.add_argument('-o', '--out')
-    ap.add_argument('--csv')
-    ap.add_argument('--json', dest='json_out')
-    ap.add_argument('--rename-dir', action='append', default=[])
-    ap.add_argument('--fsb-dir')
+                    help='paired X.assets.bank holding the samples (split-bank layout)')
+    ap.add_argument('-o', '--out', help='output root (default: <bank>_unwrapped)')
+    ap.add_argument('--csv', help='sample -> events report (default: <out>/<bank>_samples.csv)')
+    ap.add_argument('--json', dest='json_out', help='name map (default: <out>/<bank>_names.json)')
+    ap.add_argument('--rename-dir', action='append', default=[],
+                    help='folder with pre-extracted sound_N.wav (repeat per FSB: [0], [1], ...)')
+    ap.add_argument('--fsb-dir', help='folder with cut-out .fsb files (saved as <out>/fsb/N.fsb)')
     ap.add_argument('--fspro', action='store_true',
-                    help='сгенерировать проект FMOD Studio (<out>/<bank>.fspro)')
+                    help='generate an FMOD Studio project (<out>/fspro/<bank>.fspro)')
     ap.add_argument('--diff', metavar='GAME_SOUND_DIR',
-                    help='отчёт: сверка с банком игры (папка sound)')
+                    help='report: compare against the game\'s sound dir')
     ap.add_argument('--game', metavar='GAME_SOUND_DIR',
-                    help='добор недостающих событий из ванильного банка игры (с --fspro)')
+                    help='backfill events missing from your bank from the game\'s sound dir (with --fspro)')
     ap.add_argument('--game-wav', action='append', default=[],
-                    help='папки ванильных sound_N.wav (после Extract в Fmod Bank Tools)')
-    ap.add_argument('--apply', action='store_true')
+                    help='pre-extracted vanilla sound_N.wav folders (alternative to decoding)')
+    ap.add_argument('--apply', action='store_true',
+                    help='write files (without it only reports are written)')
     args = ap.parse_args()
     bank_path = args.bank
     strings_path = args.strings or os.path.join(

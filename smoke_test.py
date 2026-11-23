@@ -19,7 +19,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOOL = os.path.join(HERE, 'fmod_bank_unwrap.py')
+TOOL = os.path.join(HERE, 'rebank.py')
 
 
 def main():

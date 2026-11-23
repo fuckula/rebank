@@ -1,6 +1,6 @@
 # FMOD 2.02 bank layout — decisions
 
-Scope: `fmod_bank_unwrap.py` parser and `.fspro` writer. Offsets verified
+Scope: `rebank.py` parser and `.fspro` writer. Offsets verified
 against the bank reader in `fmodstudio64.dll` (IDA, `sub_1800ABC30` and
 helpers); see `wtcli/rev/BANK_LAYOUT.md` scratch notes for the decompile.
 
@@ -10,6 +10,16 @@ helpers); see `wtcli/rev/BANK_LAYOUT.md` scratch notes for the decompile.
 element size, then `n × elemSize` bytes (`sub_1800AEFB0` → `sub_1800BB510`
 with `v5 == 0`). Reading `elemSize` per element is wrong and silently
 mis-aligns everything after it.
+
+## Strings bank (`STDT` inside `LIST/PROJ`)
+
+`[u32 ver][array(n, es=8) nodes][array(g, es=16) guids][u16 sl][pool]`
+`[u16 mc][mc×3 guid→node][u16 pc][pc×3 parent]`. Nodes are two `u32`:
+`v1 = strOff (u24)`, `v2 = guidIdx (u24) | childCount << 24`. `0xFFFFFF`
+means "none". **`sl` and the two tail counts are plain `u16`, not shifted
+varints** — the only place in the format where that is true.
+`tests/test_primitives.py` builds a synthetic `STDT` from these rules; it
+caught the tail arrays being mis-read as varints.
 
 ## Event body (`EVTB`)
 

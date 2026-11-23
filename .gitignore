@@ -3,3 +3,6 @@ __pycache__/
 *_unwrapped/
 *.fsb
 *.bank
+*.egg-info/
+build/
+dist/
