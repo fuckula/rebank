@@ -113,6 +113,62 @@ done
 ```
 Each bank becomes its own `fspro/` project.
 
+## Starting a mod from scratch
+
+The supported base for a new sound mod is Gaijin's official project
+[`fmod_studio_warthunder_for_modders`](https://github.com/GaijinEntertainment/fmod_studio_warthunder_for_modders)
+(FMOD Studio 2.02.22). `rebank init` sets up a workspace around it:
+
+```sh
+rebank init my-mod                        # clones the reference project into my-mod/reference
+rebank init my-mod --reference ./fmod_studio_warthunder_for_modders-master   # or reuse a local copy
+```
+
+```
+my-mod/
+├── reference/     official project: open sounds.fspro, edit events, Build
+└── mod/
+    ├── README.txt  rules + install snippet for users
+    └── sound/      your built .bank (+ .assets.bank) files
+```
+
+Build only the banks you changed, drop them into `mod/sound/`, then validate
+before sharing:
+
+```sh
+rebank check my-mod/mod/sound --game "$WT/sound"
+```
+
+It reports events that were renamed or dropped versus the game bank (both
+break the mod) and banks the game does not know. Exit code is non-zero on
+problems, so it fits a build script.
+
+The reference project covers **107 of the 139** banks the game ships; the
+rest (localised dialogs, `infantry_*`, `football`) are not in it. For those,
+and for events the project leaves out (all 24 RWR `alarm_radar_*` tones, for
+example), build the project from the vanilla bank instead (scenario C/D) and
+copy the events you need into your mod project.
+
+## Event catalog
+
+`rebank catalog` lists every event of every bank with the game parameters it
+reacts to:
+
+```sh
+rebank catalog "$WT/sound" -o docs/EVENTS.md --csv docs/EVENTS.csv
+```
+
+| Bank group | What lives there |
+|---|---|
+| `aircraft_gui` | cockpit warnings, RWR alarms, lock/launch tones, GUI |
+| `aircraft_*`, `weapons_*`, `engines_*` | airframes, guns, missiles, engines |
+| `tanks_*`, `ships_*` | ground and naval vehicles |
+| `*_crew_dialogs_*`, `_dialogs_*` | localized crew voice (not in the reference project) |
+| `infantry_*`, `football`, `dialogs` | infantry and event modes (not in the reference project) |
+
+The catalog for the tested build is committed at
+[`docs/EVENTS.md`](docs/EVENTS.md) (34k lines, one row per event).
+
 ## Output
 
 Output (`<bank>_unwrapped/` by default):
