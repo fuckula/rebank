@@ -26,8 +26,8 @@ sound_N.wav  ->  aircraft/gui/000_focus.wav
 | default | Parses the bank, writes `<bank>_samples.csv` (sample -> events map) and `<bank>_names.json` |
 | `--rename-dir DIR...` | Copies decoded `sound_N.wav` folders (Fmod Bank Tools output) into an event-path tree `aircraft/gui/000_focus.wav` |
 | `--diff GAME_DIR` | Report: which events your bank is missing vs the current game install |
-| `--fspro` | Generates a **FMOD Studio project** (`<out>/fspro/<bank>.fspro`): events with original GUIDs (game-compatible), SingleSound/MultiSound instruments, `Assets/` audio — open, edit, Build |
-| `--game GAME_DIR` | Backfills events missing from your bank using the game's vanilla bank pair (`X.bank` + `X.assets.bank`), decoding its FSB5 samples (Vorbis/FADPCM) on the fly |
+| `--fspro` | Generates a **FMOD Studio project** (`<out>/fspro/<bank>.fspro`): events with original GUIDs (game-compatible), SingleSound/MultiSound instruments, `ParameterProxy` sheets for parameter-driven events (RWR tones etc.), `Assets/` audio — open, edit, Build |
+| `--game GAME_DIR` | Backfills events missing from your bank using the game's vanilla bank pair (`X.bank` + `X.assets.bank`), including their parameter sheets, decoding FSB5 samples (Vorbis/FADPCM) on the fly |
 | `-a X.assets.bank` | Vanilla-style banks where events and samples live in separate files |
 
 Deps: `pip install -r requirements.txt` (+ `ffmpeg` on PATH for Ogg->WAV
@@ -63,15 +63,24 @@ Then open `<out>\fspro\<bank>.fspro` in FMOD Studio 2.02.22, edit, Build.
 - 55 RWSM-only events have no strings entry (mod author's custom actions);
   19 remain unnamed by design — names only exist in the mod's source project.
 
-## Known limitation: parameter-driven playlists
+## Parameter sheets (ActionSheet → ParameterProxy)
 
-Multi Instruments whose `trackGuid` is zero (parameter-scatter playlists,
-e.g. per-RWR warning tones) are not linked to their events by the bank
-format itself — FMOD resolves them at runtime through parameter values.
-The tool links every instrument that has an explicit track; zero-track
-playlists are skipped rather than guessed (their 53 decoded samples remain
-in the report). Mixer buses, snapshots and automation curves are not
-exported into the generated project.
+Event bodies carry a slot array at `EVTB+0x5D` (varint count, one `u16`
+element size, then `n × 16`-byte owner GUIDs — layout verified against the
+bank reader in `fmodstudio64.dll`). Each owner GUID names a `PMLB` record:
+`(paramGuid, [instrumentGuids])`. Slots of one event may drive **different**
+game parameters (`track`, `volume`, `launch`, `new` for RWR alarms), and
+several `PMLB` records may share a parameter. The project maps this to
+`Event.parameters → ParameterProxy(preset) → modules → MultiSound(items)`,
+one proxy per parameter, no trigger conditions (the bank stores none in
+`CTRO`). Parameters without any resolvable instrument are omitted rather
+than guessed. Nested events (`LISTEVIS`) are attributed to their outer
+named event.
+
+Still not exported: mixer buses, snapshots, automation curves, transition
+regions (`TRNS/TRAN`). Events with zero instruments stay empty — that is
+a bank fact, not a parser gap (all 24 `alarm_radar_*` events have four
+parameter sheets in vanilla; the mod bank leaves them without items).
 
 ## Credits
 

@@ -406,8 +406,8 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
     meta = os.path.join(out_dir, 'Metadata')
     for d in ('Asset', 'AudioFile', 'Bank', 'BankFolder', 'EffectPresetFolder',
               'EncodingSetting', 'Event', 'EventFolder', 'Group',
-              'ParameterPresetFolder', 'Platform', 'ProfilerFolder', 'Return',
-              'SandboxFolder', 'Snapshot', 'SnapshotGroup', 'VCA'):
+              'ParameterPreset', 'ParameterPresetFolder', 'Platform', 'ProfilerFolder',
+              'Return', 'SandboxFolder', 'Snapshot', 'SnapshotGroup', 'VCA'):
         os.makedirs(os.path.join(meta, d), exist_ok=True)
     os.makedirs(os.path.join(out_dir, 'Assets'), exist_ok=True)
 
@@ -520,8 +520,9 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             counter['audiofiles'] += 1
         return audio_guids[key]
 
-    def emit_event(eg, epath, ev_waits, ev_multi, audio_map):
-        """ev_waits: [(key)], ev_multi: [[key], ...] — уже собранные ключи сэмплов."""
+    def emit_event(eg, epath, ev_waits, ev_multi, audio_map, sheets=None):
+        """ev_waits: [key], ev_multi: [[key], ...] — собранные ключи сэмплов.
+        sheets: [(paramGuid, (name, min, max), [[key], ...])] — параметрические листы."""
         parts = epath.replace('event:/', '').strip('/').split('/')
         parent = ensure_folder(parts[:-1])
         emix, mtrk, minp, aprops, mtrk2, tline = (W() for _ in range(6))
@@ -548,54 +549,51 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
         # параметрический лист (ActionSheet): EVTB[0x5D] слоты -> PMLB(owner) ->
         # параметр + инструменты. Каждый слот = свой диапазон параметра
         # (ParameterCondition) и свой MultiSound; всё вешается на ParameterProxy.
-        slots = bank_obj.ev_slots.get(eg, []) if bank_obj else []
-        if slots:
-            sheets = [(pg, items) for s in slots for pg, items in bank_obj.pml.get(s, [])]
-            if sheets:
-                pg = sheets[0][0]
-                pname, pmin, pmax = bank_obj.params.get(pg, (guid_str(pg), 0.0, 1.0))
-                if pg not in preset_cache:
-                    gparam, gpreset = W(), W()
-                    preset_cache[pg] = (gparam, gpreset)
-                    open(os.path.join(meta, 'ParameterPreset', gpreset + '.xml'), 'w',
-                         encoding='utf-8').write(_xml(model,
-                        _xml_obj('ParameterPreset', gpreset, _prop('name', pname) +
-                                 _rel('folder', m_pf) + _rel('parameter', gparam)),
-                        _xml_obj('GameParameter', gparam,
-                                 _prop('initialValue', '%g' % pmin) +
-                                 _prop('minimum', '%g' % pmin) + _prop('maximum', '%g' % pmax) +
-                                 _prop('isExposedRecursively', 'false'))))
-                gparam, gpreset = preset_cache[pg]
-                proxy = W()
-                proxy_mods = []
-                step = (pmax - pmin) / float(len(slots)) if len(slots) > 1 else 1.0
-                for si, s in enumerate(slots):
-                    keys = []
-                    for _pg, items in bank_obj.pml.get(s, []):
-                        for it in items:
-                            keys.extend(instrument_keys(it))
-                    if not keys:
-                        continue
-                    mg = W()
-                    proxy_mods.append(mg)
-                    gdests = []
-                    for key in keys:
-                        sg = W()
-                        gdests.append(sg)
-                        sounds_xml += _xml_obj('SingleSound', sg,
-                            _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
-                            _rel('audioFile', sound_guid(epath, key, audio_map)))
-                    cond = W()
-                    lo = pmin + step * si
-                    sounds_xml += _xml_obj('ParameterCondition', cond,
-                        _prop('minimum', '%g' % lo) + _prop('maximum', '%g' % (lo + step)) +
-                        _rel('parameter', gparam))
-                    sounds_xml += _xml_obj('MultiSound', mg,
-                        _rel('triggerConditions', cond) + _rel('sounds', *gdests))
-                if proxy_mods:
-                    sounds_xml += _xml_obj('ParameterProxy', proxy,
-                        _rel('modules', *proxy_mods) + _rel('preset', gpreset))
-                    params_rel = _rel('parameters', proxy)
+        if sheets is None and bank_obj:
+            # слоты EVTB[0x5D] -> PMLB(owner): (param, items). Слоты одного события
+            # могут задавать РАЗНЫЕ параметры (track/volume/launch/new) — один
+            # ParameterProxy на параметр; несколько PMLB одного параметра = его группы.
+            merged = {}
+            for s in bank_obj.ev_slots.get(eg, []):
+                for pg, its in bank_obj.pml.get(s, []):
+                    grp = [k for it in its
+                           for k in instrument_keys(it, waits, muits, wg2rec, audio_map)]
+                    if grp:
+                        merged.setdefault(pg, []).append(grp)
+            sheets = [(pg, bank_obj.params.get(pg, (guid_str(pg), 0.0, 1.0, 0.0))[:3], grps)
+                      for pg, grps in merged.items()]
+        proxies = []
+        for pg, (pname, pmin, pmax), grps in (sheets or []):
+            if pg not in preset_cache:
+                gparam, gpreset = W(), W()
+                preset_cache[pg] = gpreset
+                open(os.path.join(meta, 'ParameterPreset', gpreset + '.xml'), 'w',
+                     encoding='utf-8').write(_xml(model,
+                    _xml_obj('ParameterPreset', gpreset, _prop('name', pname) +
+                             _rel('folder', m_pf) + _rel('parameter', gparam)),
+                    _xml_obj('GameParameter', gparam,
+                             _prop('initialValue', '%g' % pmin) +
+                             _prop('minimum', '%g' % pmin) + _prop('maximum', '%g' % pmax) +
+                             _prop('isExposedRecursively', 'false'))))
+            gpreset = preset_cache[pg]
+            proxy = W()
+            proxies.append(proxy)
+            pmods = []
+            for keys in grps:
+                mg = W()
+                pmods.append(mg)
+                gdests = []
+                for key in keys:
+                    sg = W()
+                    gdests.append(sg)
+                    sounds_xml += _xml_obj('SingleSound', sg,
+                        _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
+                        _rel('audioFile', sound_guid(epath, key, audio_map)))
+                sounds_xml += _xml_obj('MultiSound', mg, _rel('sounds', *gdests))
+            sounds_xml += _xml_obj('ParameterProxy', proxy,
+                _rel('modules', *pmods) + _rel('preset', gpreset))
+        if proxies:
+            params_rel = _rel('parameters', *proxies)
         open(os.path.join(meta, 'Event', guid_str(eg) + '.xml'), 'w', encoding='utf-8').write(_xml(model,
             _xml_obj('Event', guid_str(eg), _prop('name', parts[-1]) + _prop('outputFormat', 2) +
                      _rel('folder', parent) + _rel('mixer', emix) + _rel('masterTrack', mtrk) +
@@ -650,8 +648,8 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
     for eg, epath in sorted(((e, strings[e]) for e in events if e in strings), key=lambda kv: kv[1]):
         s, m = collect(eg, waits, muits, tg2ev, wg2rec, audio_map)
         emit_event(eg, epath, s, m, audio_map)
-    for ge, gp, s, mlt in (vanilla_events or []):
-        emit_event(ge, gp, s, mlt, audio_map)
+    for ge, gp, s, mlt, sheets in (vanilla_events or []):
+        emit_event(ge, gp, s, mlt, audio_map, sheets=sheets or None)
 
     return {'fspro': os.path.join(out_dir, bank_name + '.fspro'),
             'events': counter['events'], 'audiofiles': counter['audiofiles'],
@@ -809,14 +807,14 @@ def main():
                     audio_map.setdefault(('v', d_idx, int(m.group(1))), os.path.join(d, f))
         if not audio_map and fsbs:
             # своих wav нет (Fmod Bank Tools не прогоняли) — декодируем сами
-            audio_map = decode_game_fsbs(bank_path, out_root)
+            audio_map = decode_game_fsbs(args.assets or bank_path, out_root)
             audio_map = {('v', k[1], k[2]): v for k, v in audio_map.items()}
         if args.game:
             gbank = os.path.join(args.game, os.path.basename(bank_path))
             gassets = os.path.splitext(gbank)[0] + '.assets.bank'
             if os.path.exists(gbank) and os.path.exists(gassets):
                 gstrings = parse_strings_bank(os.path.join(args.game, 'masterbank.strings.bank'))
-                _, gevents, gwaits, gmuits, gwavs, _ = parse_bank(gbank)
+                gbank_obj, gevents, gwaits, gmuits, gwavs, _ = parse_bank(gbank)
                 _, _, _, _, gawavs, _ = parse_bank(gassets)
                 gwg2 = {}
                 seen = defaultdict(int)
@@ -824,7 +822,7 @@ def main():
                 for wrec in gw:
                     seen[wrec['index']] += 1
                     gwg2[wrec['guid']] = (seen[wrec['index']] - 1, wrec)
-                _, gtg2ev, _ = link_samples(gevents, gwaits, gmuits, gw, getattr(Bank(gbank), 'evis', ()))
+                _, gtg2ev, _ = link_samples(gevents, gwaits, gmuits, gw, gbank_obj.evis)
                 local_paths = {strings.get(e) for e in events}
                 n_fill = 0
                 # ванильные wav/ogg: папки --game-wav (по числу FSB assets-банка);
@@ -843,7 +841,7 @@ def main():
                 # вложенные события: EVIT { EVIB.targetGuid, INST.trackGuid }:
                 # безымянное inner-событие играется внутри именованного outer
                 g_nested = defaultdict(set)   # inner event guid -> outer track guids
-                for rec in Bank(gbank).items('LISTEVIS', b'EVIT', {b'EVIB', b'INST'}):
+                for rec in gbank_obj.items('LISTEVIS', b'EVIT', {b'EVIB', b'INST'}):
                     evib, inst = rec.get(b'EVIB'), rec.get(b'INST')
                     if not evib or not inst:
                         continue
@@ -883,8 +881,18 @@ def main():
                                     grp.append(('g', rec[0], rec[1]['index']))
                             if grp:
                                 mlt.append(grp)
-                    vanilla_events.append((ge, gp, s, mlt))
-                    for key in s + [k for grp in mlt for k in grp]:
+                    merged = {}
+                    for sl in gbank_obj.ev_slots.get(ge, []):
+                        for pg, its in gbank_obj.pml.get(sl, []):
+                            grp = [k for it in its
+                                   for k in instrument_keys(it, gwaits, gmuits, gwg2, g_audio, prefix='g')]
+                            if grp:
+                                merged.setdefault(pg, []).append(grp)
+                    sheets = [(pg, gbank_obj.params.get(pg, (guid_str(pg), 0.0, 1.0, 0.0))[:3], grps)
+                              for pg, grps in merged.items()]
+                    vanilla_events.append((ge, gp, s, mlt, sheets))
+                    for key in s + [k for grp in mlt for k in grp] + \
+                            [k for _pg, _pm, grps in sheets for grp in grps for k in grp]:
                         src = g_audio[key]
                         rel = gp.replace('event:/', '') + '/%03d_vanilla.wav' % key[2]
                         dst = os.path.join(van_dir, *rel.split('/'))
@@ -963,7 +971,8 @@ def main():
         fspro_dir = os.path.join(out_root, 'fspro')
         info = generate_fspro(fspro_dir, bank.name.replace('.assets', '') or 'project',
                               events, strings, waits, muits, tg2ev, wg2rec, audio_map,
-                              vanilla_events=vanilla_events, evis=getattr(bank, 'evis', ()))
+                              vanilla_events=vanilla_events, evis=getattr(bank, 'evis', ()),
+                              bank_obj=bank)
         print('fspro: %(fspro)s (events=%(events)d, audiofiles=%(audiofiles)d, '
               'events_without_name=%(events_without_name)d)' % info)
 

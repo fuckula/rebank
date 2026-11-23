@@ -41,6 +41,29 @@ def main():
 
     fspro_dir = os.path.join(out, 'fspro')
     events = glob.glob(os.path.join(fspro_dir, 'Metadata', 'Event', '*.xml'))
+    # целостность ссылок: каждый <destination> должен резолвиться в объект
+    # (тот же файл или любой другой в Metadata) — иначе Studio пометит malformed;
+    # каждый SingleSound/MultiSound/ParameterProxy должен иметь владельца
+    ids, owned = set(), set()
+    for f in glob.glob(os.path.join(fspro_dir, 'Metadata', '**', '*.xml'), recursive=True):
+        root = ET.parse(f).getroot()
+        for el in root.iter('object'):
+            ids.add(el.get('id'))
+        for el in root.iter('destination'):
+            owned.add(el.text)
+    refs = [el.text for f in glob.glob(os.path.join(fspro_dir, 'Metadata', '**', '*.xml'), recursive=True)
+            for el in ET.parse(f).getroot().iter('destination')]
+    dangling = sorted({r for r in refs if r not in ids})
+    if dangling:
+        print('FAIL: %d dangling references, e.g. %s' % (len(dangling), dangling[:3]))
+        return 1
+    orphans = [(o.get('class'), o.get('id')) for f in events
+               for o in ET.parse(f).getroot().iter('object')
+               if o.get('class') in ('SingleSound', 'MultiSound', 'ParameterProxy') and o.get('id') not in owned]
+    if orphans:
+        print('FAIL: %d unowned sound/proxy objects, e.g. %s' % (len(orphans), orphans[:3]))
+        return 1
+    print('PASS: reference integrity (%d objects, %d refs, 0 dangling)' % (len(ids), len(refs)))
     if not events:
         print('FAIL: no event XML generated')
         return 1
