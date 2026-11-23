@@ -1,8 +1,6 @@
 # ReBank
 
 [![CI](https://github.com/fuckula/rebank/actions/workflows/ci.yml/badge.svg)](https://github.com/fuckula/rebank/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/rebank)](https://pypi.org/project/rebank/)
-[![Python](https://img.shields.io/pypi/pyversions/rebank)](https://pypi.org/project/rebank/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Turn compiled FMOD Studio `.bank` files back into named audio samples and an
@@ -38,16 +36,21 @@ sound_N.wav  ->  aircraft/gui/000_focus.wav  ->  fspro project
 
 ## Install
 
-Core has **no dependencies** (Python ≥ 3.10, standard library only).
+**Windows (no Python needed):** download `rebank.exe` from the latest
+[Release](https://github.com/fuckula/rebank/releases) and run it from any
+folder. It is a single self-contained file with FSB5 decoding built in.
+
+**From source** (any OS, Python ≥ 3.10, core has no dependencies):
 
 ```sh
-pip install rebank            # parsing, reports, project from existing wav
-pip install "rebank[decode]"  # + FSB5 decoding (Vorbis / FADPCM) via python-fsb5
+git clone https://github.com/fuckula/rebank
+cd rebank
+pip install .                 # parsing, reports, project from existing wav
+pip install ".[decode]"       # + FSB5 decoding (Vorbis / FADPCM) via python-fsb5
 ```
 
-Windows users without Python: grab `rebank-<version>-windows.zip` from
-[Releases](https://github.com/fuckula/rebank/releases) — a
-self-contained `rebank.exe`.
+Or run it straight from the checkout: `python rebank.py …` (same as `rebank`).
+
 
 `ffmpeg` on `PATH` is needed only when decoded samples are Ogg (FMOD Studio
 imports PCM wav).
