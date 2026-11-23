@@ -539,7 +539,6 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
                     _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
                     _rel('audioFile', sound_guid(epath, key, audio_map)))
             sounds_xml += _xml_obj('MultiSound', mg, _rel('sounds', *gdests))
-        mods_rel = _rel('modules', *multi_groups) if multi_groups else ''
         params_rel = ''
         # параметрический лист (ActionSheet): EVTB[0x5D] слоты -> PMLB(owner) ->
         # параметр + инструменты. Каждый слот = свой диапазон параметра
@@ -558,6 +557,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             sheets = [(pg, bank_obj.params.get(pg, (guid_str(pg), 0.0, 1.0, 0.0))[:3], grps)
                       for pg, grps in merged.items()]
         proxies = []
+        proxy_xml = ''
         for pg, (pname, pmin, pmax), grps in (sheets or []):
             if pg not in preset_cache:
                 gparam, gpreset = W(), W()
@@ -573,10 +573,13 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             gpreset = preset_cache[pg]
             proxy = W()
             proxies.append(proxy)
-            pmods = []
+            proxy_xml += _xml_obj('ParameterProxy', proxy, _rel('preset', gpreset))
             for keys in grps:
+                # модуль листа живёт на треке (MasterTrack/Timeline), как в эталоне
+                # Gaijin; ParameterProxy только приносит параметр. Модуль на прокси
+                # без владельца-трека Studio помечает как invalid component.
                 mg = W()
-                pmods.append(mg)
+                multi_groups.append(mg)
                 gdests = []
                 for key in keys:
                     sg = W()
@@ -585,10 +588,9 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
                         _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
                         _rel('audioFile', sound_guid(epath, key, audio_map)))
                 sounds_xml += _xml_obj('MultiSound', mg, _rel('sounds', *gdests))
-            sounds_xml += _xml_obj('ParameterProxy', proxy,
-                _rel('modules', *pmods) + _rel('preset', gpreset))
         if proxies:
             params_rel = _rel('parameters', *proxies)
+        mods_rel = _rel('modules', *multi_groups) if multi_groups else ''
         open(os.path.join(meta, 'Event', guid_str(eg) + '.xml'), 'w', encoding='utf-8').write(_xml(model,
             _xml_obj('Event', guid_str(eg), _prop('name', parts[-1]) + _prop('outputFormat', 2) +
                      _rel('folder', parent) + _rel('mixer', emix) + _rel('masterTrack', mtrk) +
@@ -610,7 +612,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             _xml_obj('MixerBusPanner', gpan),
             _xml_obj('MixerBusFader', f1),
             _xml_obj('MixerBusFader', f2),
-            sounds_xml))
+            proxy_xml + sounds_xml))
         counter['events'] += 1
 
     ev_owner = event_owners(events, evis)
