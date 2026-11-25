@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="430" viewBox="0 0 980 430">
+  <defs>
+    <linearGradient id="termBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#0b1120"/>
+    </linearGradient>
+  </defs>
+  <rect width="980" height="430" rx="14" fill="url(#termBg)" stroke="#334155" stroke-width="1.5"/>
+  <!-- titlebar -->
+  <rect width="980" height="38" rx="14" fill="#1e293b"/>
+  <rect y="24" width="980" height="14" fill="#1e293b"/>
+  <circle cx="24" cy="19" r="6" fill="#ef4444"/>
+  <circle cx="44" cy="19" r="6" fill="#f59e0b"/>
+  <circle cx="64" cy="19" r="6" fill="#22c55e"/>
+  <text x="490" y="24" fill="#94a3b8" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" text-anchor="middle">rebank — FMOD Studio .bank unwrap &amp; mod check</text>
+
+  <!-- terminal lines -->
+  <g font-family="Consolas, 'Cascadia Mono', monospace" font-size="14.5">
+    <text x="24" y="72" fill="#38bdf8">$ <tspan fill="#f8fafc">rebank RWSM/aircraft_gui.bank --fspro --game "$WT/sound" --apply</tspan></text>
+    <text x="24" y="98" fill="#94a3b8">strings: 22814 entries from RWSM/masterbank.strings.bank</text>
+    <text x="24" y="120" fill="#94a3b8">bank aircraft_gui fmt=0x8e: events=330 single=398 multi=42 waveforms=378 fsb=1</text>
+    <text x="24" y="142" fill="#94a3b8">samples referenced: 378, named: 378</text>
+    <text x="24" y="164" fill="#a7f3d0">  decoded aircraft_gui[0]: 378</text>
+    <text x="24" y="186" fill="#a7f3d0">  decoded aircraft_gui.assets[0]: 408</text>
+    <text x="24" y="208" fill="#60a5fa">vanilla backfill: 24 events, 48 wav</text>
+    <text x="24" y="230" fill="#cbd5e1">csv:   aircraft_gui_unwrapped/aircraft_gui_samples.csv</text>
+    <text x="24" y="252" fill="#cbd5e1">json:  aircraft_gui_unwrapped/aircraft_gui_names.json</text>
+    <text x="24" y="274" fill="#cbd5e1">fspro: aircraft_gui_unwrapped/fspro/aircraft_gui.fspro (events=354, audiofiles=426, events_without_name=0)</text>
+    <text x="24" y="296" fill="#4ade80">done: aircraft_gui_unwrapped</text>
+
+    <text x="24" y="336" fill="#38bdf8">$ <tspan fill="#f8fafc">rebank check my-mod/mod/sound --game "$WT/sound" --studio-blk config/sound_studio.blk</tspan></text>
+    <text x="24" y="362" fill="#4ade80" font-weight="700">OK: my-mod/mod/sound</text>
+    <text x="24" y="394" fill="#64748b"># Open aircraft_gui_unwrapped/fspro/aircraft_gui.fspro in FMOD Studio 2.02 and Build.</text>
+  </g>
+</svg>

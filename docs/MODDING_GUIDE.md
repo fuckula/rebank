@@ -1,161 +1,166 @@
-# War Thunder sound modding guide
+[← Docs](README.md) · [README](../README.md) · [Events Catalog](EVENTS.md)
 
-Recipes that work with the current game build, each with the failure it
-prevents. Everything below was verified against the Sky Odyssey client
-(`aces.exe` sha256 `4540a9cc…`, FMOD Studio 2.02.22): the game code was
-read with IDA, the banks were parsed, the Studio build was run.
+# War Thunder Sound Modding Guide
 
-`$WT` is the War Thunder folder (`…/War Thunder`). All commands are run
-from the ReBank checkout.
+Tested recipes for building working War Thunder sound mods — and the exact game-engine failures each rule prevents. Verified against the **Sky Odyssey** client (`FMOD Studio 2.02.22`) by binary analysis, bank parsing, and full Studio builds.
 
-## 1. The mod folder must be complete
+`$WT` below refers to your War Thunder installation directory (`.../War Thunder`).
 
-**Rule.** `sound/mod/<any folder>/` must contain every bank of
-`config/sound_studio.blk` (`banks → presets → master`) that has no
-`optional:b=true` — **47 banks** in this build: `masterbank`,
-`masterbank.strings`, `masterbank.assets`, every `aircraft_*`, `tanks_*`,
-`ships_*` bank and its `.assets` pair. Only `dialogs*`,
-`crew_dialogs_common*`, `football*`, `event*`, `event_tgw*` are optional.
+## Contents
 
-**Failure it prevents.** The first missing bank switches the **whole mod**
-off: the game logs `Sound.MOD disabled: modded bank is missing: …` and
-plays vanilla sound everywhere. Nothing in the UI tells you; the log
-(`.game_logs/*.clog`) is encrypted.
+- [1. Ship a Complete Mod Folder (All 47 Required Banks)](#1-ship-a-complete-mod-folder-all-47-required-banks)
+- [2. Keep Every Event Name, Path, Bank Name, and Bus Unchanged](#2-keep-every-event-name-path-bank-name-and-bus-unchanged)
+- [3. Always Ship Split Pairs Together](#3-always-ship-split-pairs-together)
+- [4. Rebuilding a Bank from the Game with ReBank](#4-rebuilding-a-bank-from-the-game-with-rebank)
+- [5. Changing Samples Without Touching the Metadata Bank](#5-changing-samples-without-touching-the-metadata-bank)
+- [6. Updating a Mod After a Game Patch](#6-updating-a-mod-after-a-game-patch)
+- [7. Pre-Release Checklist](#7-pre-release-checklist)
+
+```mermaid
+flowchart TD
+    A["Launch with enable_mod:b=yes"] --> B{"Gate 1: All 47 required<br/>banks present in sound/mod/<dir>/?"}
+    B -- No --> X1["Sound.MOD disabled:<br/>whole mod ignored silently"]
+    B -- Yes --> C{"Gate 2: masterbank hashes<br/>not on prohibited list?"}
+    C -- No --> X2["bank mods disallowed"]
+    C -- Yes --> D["Modded banks loaded<br/>([SOUND] Mod is used)"]
+```
+
+---
+
+## 1. Ship a Complete Mod Folder (All 47 Required Banks)
+
+**Rule.** `sound/mod/<your_mod>/` must contain **every** bank listed in `config/sound_studio.blk` (`banks → presets → master`) that does not have `optional:b=true` — **47 banks** in the Sky Odyssey build:
+
+- `masterbank`, `masterbank.strings`, `masterbank.assets`
+- every `aircraft_*`, `tanks_*`, `ships_*` metadata bank and its `.assets` pair
+
+Only `dialogs*`, `crew_dialogs_common*`, `football*`, `event*`, and `event_tgw*` are optional.
+
+> [!CAUTION]
+> **Partial mod folders are disabled silently.** On the very first missing required bank, the game switches the **entire mod** off (`Sound.MOD disabled: modded bank is missing: ...`) and falls back to vanilla audio everywhere. Nothing appears in the game UI, and `.game_logs/*.clog` files are encrypted. Never distribute a mod folder containing only a single modified `.bank`.
 
 **Recipe.**
 
-1. Create the folder and copy the untouched vanilla banks into it:
+1. Copy all untouched vanilla banks into your mod folder first:
+
    ```sh
+   # bash
    mkdir -p "$WT/sound/mod/my_mod"
    cp "$WT/sound/"*.bank "$WT/sound/mod/my_mod/"
    ```
-2. Replace only the banks you rebuilt (both halves, see §3).
-3. Enable mods in `$WT/config.blk`:
+
+   ```powershell
+   # PowerShell
+   New-Item -ItemType Directory -Force "$WT\sound\mod\my_mod" | Out-Null
+   Copy-Item "$WT\sound\*.bank" "$WT\sound\mod\my_mod\"
    ```
+
+2. Overwrite only the bank pairs you rebuilt ([both halves](#3-always-ship-split-pairs-together)).
+3. Enable mods in `$WT/config.blk`:
+
+   ```text
    sound{
      fmod_sound_enable:b=yes
      enable_mod:b=yes
    }
    ```
-4. Verify before sharing:
+
+4. Validate completeness and event paths before sharing:
+
    ```sh
    rebank check "$WT/sound/mod/my_mod" --game "$WT/sound" \
        --studio-blk /tmp/wt_aces/aces.vromfs.bin_u/config/sound_studio.blk
    ```
-   (`/tmp/wt_aces` is `wt_ext_cli unpack_vromf -i "$WT/aces.vromfs.bin" -o /tmp/wt_aces --format BlkText`.)
-   Without `--studio-blk` the check still warns about a metadata bank
-   whose `.assets.bank` exists in the game but not in the mod.
 
-**Do not** ship a folder with a single changed bank — that is the
-number-one cause of "the mod is ignored".
+   (`/tmp/wt_aces` comes from `wt_ext_cli unpack_vromf -i "$WT/aces.vromfs.bin" -o /tmp/wt_aces --format BlkText`.) Even without `--studio-blk`, `rebank check` warns when a metadata `.bank` is missing its paired `.assets.bank`.
 
-## 2. Keep the identity of everything
+---
 
-**Rule.** Event names, event paths, bank names, the mixer bus tree and
-the parameters the game drives (`track`, `volume`, `on_shot`, …) must stay
-exactly as in the game. Change the *content* of events, not their
-identity.
+## 2. Keep Every Event Name, Path, Bank Name, and Bus Unchanged
 
-**Failure it prevents.** The game starts events by path (`event:/aircraft/gui/alarm_radar_an_alr_56`) and sets parameters by name; a renamed event or a missing parameter is silently ignored. The reference project's
-Readme says the same.
+**Rule.** Event names, paths (`event:/aircraft/gui/alarm_radar_an_alr_56`), bank filenames, mixer bus hierarchy, and game-driven parameters (`track`, `volume`, `on_shot`, …) must match the game exactly. Change the *content* inside events, never their identity.
 
-**Recipe.** Start from Gaijin's
-[`fmod_studio_warthunder_for_modders`](https://github.com/GaijinEntertainment/fmod_studio_warthunder_for_modders)
-(FMOD Studio **2.02.22** — `rebank init my-mod` sets up a workspace) or
-from the vanilla bank itself with `rebank … --fspro` when the event is not
-in the reference project (all 24 RWR `alarm_radar_*` tones, localised
-dialogs, `infantry_*`, `football`). `rebank check` fails on renamed or
-dropped events.
+**Failure it prevents.** The engine triggers events by path and feeds parameters by name; a renamed event or missing parameter is ignored without warning.
 
-## 3. Banks come in split pairs
+**Recipe.**
 
-**Rule.** Every bank is built as two files: `<name>.bank` (metadata:
-events, instruments, parameter sheets) and `<name>.assets.bank` (sample
-data). The master bank also produces `masterbank.strings.bank` (paths).
-This is FMOD Studio's "Build metadata and assets to separate banks"
-setting; the official project has it on, and the game ships this layout.
+- Start new projects from Gaijin's official [`fmod_studio_warthunder_for_modders`](https://github.com/GaijinEntertainment/fmod_studio_warthunder_for_modders) (FMOD Studio **2.02.22**) using `rebank init my-mod`.
+- For events omitted from Gaijin's reference project (such as all 24 RWR `alarm_radar_*` tones, localized dialogs, `infantry_*`, and `football`), rebuild from the vanilla bank instead ([§4](#4-rebuilding-a-bank-from-the-game-with-rebank)).
+- `rebank check` exits non-zero if any expected event is missing or renamed.
 
-**Failure it prevents.** A `.bank` without its `.assets.bank` leaves every
-event of that bank silent; a `.bank` from one build with an
-`.assets.bank` from another build resolves **no samples at all** — Studio
-assigns new waveform GUIDs on every build (verified: 0 GUIDs shared
-between a Studio build of the vanilla project and the vanilla bank).
+---
 
-**Recipe.** Build in Studio (File → Build), then copy **both** files of
-every bank you changed from `Build/sound/` (or your build output folder)
-into the mod folder, next to the untouched vanilla banks. Never mix a
-Studio-built `assets.bank` with the vanilla metadata bank.
+## 3. Always Ship Split Pairs Together
 
-## 4. Rebuilding a bank from the game with ReBank
+**Rule.** Every rebuilt bank outputs two files: `<name>.bank` (metadata: events, instruments, parameter sheets) and `<name>.assets.bank` (sample audio). The master bank also writes `masterbank.strings.bank`. This matches FMOD Studio's *"Build metadata and assets to separate banks"* setting.
+
+> [!WARNING]
+> **Never mix a Studio-built `.assets.bank` with a vanilla `.bank` (or vice versa).** FMOD Studio generates brand-new waveform GUIDs on every build (`0` GUIDs shared with vanilla). Mixing halves from different builds resolves zero samples and makes every event silent.
+
+**Recipe.** After `File → Build` in FMOD Studio, copy **both** `<name>.bank` and `<name>.assets.bank` from `Build/sound/` into your mod folder alongside the untouched vanilla banks.
+
+---
+
+## 4. Rebuilding a Bank from the Game with ReBank
 
 **Recipe.**
 
 ```sh
 rebank "$WT/sound/aircraft_gui.bank" -a "$WT/sound/aircraft_gui.assets.bank" \
-    --fspro -o my_project --apply          # project from the vanilla pair
+    --fspro -o my_project --apply
 ```
 
-Open `my_project/fspro/aircraft_gui.fspro` in FMOD Studio 2.02.22, edit
-the events, Build. The generated project keeps event GUIDs, paths, game
-parameters and the original samples; mixer buses are flat (master bus), so
-for events with sends to mixer buses (`_headphones` returns and the like)
-prefer the official project.
+1. Open `my_project/fspro/aircraft_gui.fspro` in **FMOD Studio 2.02.22**, replace or edit audio inside events, and run `File → Build`.
+2. ReBank preserves event GUIDs, paths, game parameters, and original samples. Note that mixer routing is flattened to the master bus, so for events relying on custom mixer returns (e.g. `_headphones`), prefer starting from Gaijin's official project.
 
-**Checks that must pass before you ship the result:**
+**Verify before shipping:**
 
 ```sh
-python smoke_test.py Build/sound/aircraft_gui.bank "$WT/sound"   # PASS, 0 dangling refs
 rebank check Build/sound --game "$WT/sound"
 ```
 
-**Known Studio behaviour, not an error:** `SingleSound` instruments on
-parameter sheets are serialised by Studio as one-entry `MultiSound`
-(537/167 instead of 475/35 in the vanilla `aircraft_gui`); playback is
-identical.
-
-## 5. Changing samples without touching the metadata bank (assets-only patch)
-
-**When.** You want the vanilla event bank untouched and only some samples
-replaced — for example F-15/Eurofighter RWR tones replaced by the F-16
-ones. Studio cannot do this (new GUIDs, §3); the samples inside the
-vanilla `<name>.assets.bank` are replaced in place.
-
-**Rule.** The sample table (`WAVS`: waveform GUID → sample index) and every
-header field of the replaced sample must stay consistent: copy the
-donor's **whole** sample header (frequency, channel count, sample count,
-Vorbis codebook id) together with its data, then fix the container
-offsets/sizes (`SNDH` table, FSB header `sampleHeadersSize`/`dataSize`).
-
-**Failure it prevents.** Copying only the data leaves the old header's
-sample count and codebook id — the FSB decodes garbage or nothing. The
-vanilla FSB mixes 48 kHz and 16 kHz Vorbis with two different codebooks;
-a swap that ignores the header breaks on exactly those slots.
-
-**Verified result (8 RWR slots):** each target slot ends with its donor's
-header (48 kHz, 2 ch, crc 3301116457) and decodes byte-identically to the
-donor; `WAVS` unchanged, so the vanilla event bank resolves everything.
-This is a one-off workflow, not a ReBank command.
-
-## 6. Game patch arrived
-
-**Recipe.** Recopy the vanilla banks into the mod folder (§1), rebuild
-your project from the new vanilla pair (§4), check which events the game
-added or removed:
+If running from a source checkout, you can also validate generated `.fspro`/built XML integrity with:
 
 ```sh
-rebank my_mod/sound/aircraft_gui.bank --diff "$WT/sound"
-rebank check my_mod/sound --game "$WT/sound" --studio-blk <sound_studio.blk>
+python smoke_test.py Build/sound/aircraft_gui.bank "$WT/sound"
 ```
 
-A mod built for the previous patch can miss new required banks — and §1
-applies again.
+> [!TIP]
+> **Known Studio serialization behavior (harmless):** `SingleSound` instruments placed on parameter sheets are serialized by FMOD Studio as one-entry `MultiSound` containers (`537/167` vs `475/35` in vanilla `aircraft_gui`). Playback behavior in-game is identical.
 
-## 7. Checklist
+---
 
-- [ ] `sound/mod/<folder>/` holds all 47 required banks (`rebank check --studio-blk` → OK)
-- [ ] every rebuilt bank shipped as `.bank` + `.assets.bank` from the same build
-- [ ] no Studio-built `.assets.bank` next to a vanilla `.bank`
-- [ ] event names/paths, bank names, parameters unchanged (`rebank check` → OK)
-- [ ] `smoke_test.py` on the built bank → PASS
-- [ ] `config.blk` has `enable_mod:b=yes` inside `sound{}`
-- [ ] tested in game: the event plays the new sound (the only proof that counts)
+## 5. Changing Samples Without Touching the Metadata Bank
+
+**When to use.** You want to keep the vanilla `<name>.bank` metadata untouched and swap individual samples inside `<name>.assets.bank` (for example, replacing F-15/Eurofighter RWR tones with F-16 tones). FMOD Studio cannot produce a drop-in `.assets.bank` alone because rebuilding assigns new waveform GUIDs ([§3](#3-always-ship-split-pairs-together)).
+
+**Rule.** Keep the `WAVS` table (`waveform GUID → sample index`) intact, and when patching an entry inside the `FSB5` container, copy the donor's **entire sample header** (sample rate, channel count, sample count, Vorbis codebook CRC) together with its audio payload, then update the `SNDH` table and FSB header sizes (`sampleHeadersSize` / `dataSize`).
+
+**Failure it prevents.** Copying only payload bytes while keeping the original sample header corrupts decoding (for example, vanilla `aircraft_gui` mixes 48 kHz and 16 kHz Vorbis samples using different codebooks). This is a manual/custom binary-patching technique rather than a built-in ReBank command.
+
+---
+
+## 6. Updating a Mod After a Game Patch
+
+When War Thunder updates:
+
+1. Re-copy untouched vanilla banks into your mod folder ([§1](#1-ship-a-complete-mod-folder-all-47-required-banks)) so newly added required banks are not missing.
+2. Check which events were added or removed since your bank was built, and re-verify your mod folder:
+
+   ```sh
+   rebank my_mod/sound/aircraft_gui.bank --diff "$WT/sound"
+   rebank check my_mod/sound --game "$WT/sound" --studio-blk <sound_studio.blk>
+   ```
+
+3. Rebuild your edited bank(s) against the new vanilla pair ([§4](#4-rebuilding-a-bank-from-the-game-with-rebank)).
+
+---
+
+## 7. Pre-Release Checklist
+
+- [ ] `sound/mod/<folder>/` holds all 47 required banks (`rebank check --studio-blk` → `OK`)
+- [ ] Every rebuilt bank ships both `<name>.bank` and `<name>.assets.bank` from the same Studio build
+- [ ] No Studio-built `.assets.bank` is paired with a vanilla `.bank`
+- [ ] Event names, paths, bank names, and parameters are unchanged (`rebank check` → `OK`)
+- [ ] `config.blk` includes `enable_mod:b=yes` inside `sound{}`
+- [ ] Tested in-game: target events play the modified audio

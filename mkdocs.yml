@@ -1,0 +1,81 @@
+site_name: ReBank Documentation
+site_description: FMOD Studio .bank decompiler, .fspro reconstructor, and War Thunder sound modding reference
+site_url: https://fuckula.github.io/rebank/
+repo_url: https://github.com/fuckula/rebank
+repo_name: fuckula/rebank
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+plugins:
+  - search:
+      separator: '[\s\-\_\/\.]+'
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+extra_javascript:
+  - https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js
+  - javascripts/tablesort.js
+
+nav:
+  - Home: README.md
+  - Guides:
+      - Sound Modding Guide: MODDING_GUIDE.md
+      - Architecture & Format: ARCHITECTURE.md
+  - Sound Events:
+      - Overview: EVENTS.md
+      - Aircraft: events/aircraft.md
+      - Tanks & Ground: events/tanks.md
+      - Ships & Naval: events/ships.md
+      - Infantry: events/infantry.md
+      - Crew Dialogs: events/crew.md
+      - Radio & Chat: events/dialogs.md
+      - Master & Misc: events/misc.md
+  - Data References:
+      - Sound Event Refs: SOUND_REFS.md
+      - Aircraft: AIRCRAFT.md
+      - Helicopters: HELICOPTERS.md
+      - Tanks: TANKS.md
+      - Ships: SHIPS.md
+      - Weapons: WEAPONS.md
+      - Vehicle Weapons:
+          - Overview: VEHICLE_WEAPONS.md
+          - Aircraft: vehicle_weapons/aircraft.md
+          - Helicopters: vehicle_weapons/helicopters.md
+          - Tanks: vehicle_weapons/tanks.md
+          - Ships: vehicle_weapons/ships.md

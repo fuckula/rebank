@@ -1,7 +1,7 @@
 NOTICE
 ======
 
-fmod-bank-unwrap is licensed under the MIT License (see LICENSE).
+ReBank (`rebank`) is licensed under the MIT License (see LICENSE).
 
 This product is not affiliated with, endorsed by, or sponsored by
 Firelight Technologies Pty Ltd (FMOD) or Gaijin Entertainment (War Thunder).
@@ -22,4 +22,4 @@ Optional Python dependencies (installed only on request)
 --------------------------------------------------------
 
 python-fsb5  https://github.com/HearthSim/python-fsb5  (MIT)
-pyogg       https://github.com/TeamPyOgg/PyOgg         (BSD-style; source of the DLLs above)
+pyogg        https://github.com/TeamPyOgg/PyOgg        (BSD-style; source of the DLLs above)

@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.10', '3.11', '3.12', '3.13']
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -28,4 +28,18 @@ jobs:
       - name: Unit tests (synthetic banks, no game assets)
         run: python -m unittest discover -s tests -v
       - name: CLI smoke
-        run: rebank --help
+        run: |
+          rebank --version
+          rebank --help
+
+  docs-lint:
+    name: Markdown lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint documentation
+        run: >
+          npx --yes markdownlint-cli2
+          "README.md" "CONTRIBUTING.md" "SECURITY.md" "CODE_OF_CONDUCT.md"
+          "docs/README.md" "docs/ARCHITECTURE.md" "docs/MODDING_GUIDE.md"
+          "docs/EVENTS.md" "docs/VEHICLE_WEAPONS.md"

@@ -1,55 +1,73 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="Segoe UI, Arial, sans-serif">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0f1420"/>
-      <stop offset="1" stop-color="#1b2338"/>
+      <stop offset="0" stop-color="#0b101b"/>
+      <stop offset="1" stop-color="#172036"/>
     </linearGradient>
     <linearGradient id="acc" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#6ea8fe"/>
-      <stop offset="1" stop-color="#8b5cf6"/>
+      <stop offset="0" stop-color="#60a5fa"/>
+      <stop offset="0.55" stop-color="#818cf8"/>
+      <stop offset="1" stop-color="#a855f7"/>
     </linearGradient>
+    <radialGradient id="glow" cx="0.82" cy="0.2" r="0.55">
+      <stop offset="0" stop-color="#6366f1" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#0b101b" stop-opacity="0"/>
+    </radialGradient>
   </defs>
   <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
 
-  <!-- decorative bank/.fspro glyphs -->
-  <g opacity="0.08" fill="#ffffff" font-family="Consolas, monospace" font-size="22">
-    <text x="40" y="90">RIFF FEV  EVTS EVTB WAIS MUIS WAVS</text>
-    <text x="40" y="600">STDT PMLB EVIS FSB5 .bank .fspro</text>
-    <text x="720" y="600">GUID 7e0b6612-8b83-432a-b8b9-5f9534882f4b</text>
+  <!-- subtle background binary tokens -->
+  <g opacity="0.07" fill="#cbd5e1" font-family="Consolas, monospace" font-size="20">
+    <text x="80" y="72">RIFF FEV  EVTS EVTB WAIS MUIS WAVS</text>
+    <text x="80" y="606">STDT PMLB EVIS FSB5 .bank .assets.bank .fspro</text>
+    <text x="740" y="606">GUID {7e0b6612-8b83-432a-b8b9-5f9534882f4b}</text>
+  </g>
+
+  <!-- top badge -->
+  <g font-family="Consolas, monospace" font-size="18" font-weight="600">
+    <rect x="80" y="106" width="338" height="36" rx="18" fill="#1e293b" stroke="#334155"/>
+    <text x="249" y="130" fill="#93c5fd" text-anchor="middle">WAR THUNDER · FMOD STUDIO 2.02</text>
   </g>
 
   <!-- title -->
-  <text x="80" y="230" fill="#ffffff" font-size="76" font-weight="700">ReBank</text>
-  <rect x="80" y="252" width="620" height="6" rx="3" fill="url(#acc)"/>
+  <text x="80" y="226" fill="#f8fafc" font-size="82" font-weight="700" letter-spacing="-1">ReBank</text>
+  <rect x="80" y="248" width="560" height="6" rx="3" fill="url(#acc)"/>
 
   <!-- tagline -->
-  <text x="80" y="320" fill="#c9d3e6" font-size="30">Compiled FMOD Studio .bank files → named samples</text>
-  <text x="80" y="364" fill="#c9d3e6" font-size="30">and an editable .fspro project. Names and GUIDs intact. Created with AI.</text>
+  <text x="80" y="314" fill="#cbd5e1" font-size="30">Turn compiled FMOD Studio .bank files into named samples</text>
+  <text x="80" y="358" fill="#cbd5e1" font-size="30">and an editable .fspro project — names, GUIDs, and parameters intact.</text>
 
-  <!-- chain -->
-  <g font-family="Consolas, monospace" font-size="22" font-weight="600">
-    <rect x="80" y="420" width="170" height="48" rx="10" fill="#223052" stroke="#3b4f7a"/>
-    <text x="165" y="451" fill="#e6ecff" text-anchor="middle">.bank</text>
-    <text x="268" y="451" fill="#6ea8fe" text-anchor="middle">→</text>
-    <rect x="292" y="420" width="260" height="48" rx="10" fill="#223052" stroke="#3b4f7a"/>
-    <text x="422" y="451" fill="#e6ecff" text-anchor="middle">strings → events</text>
-    <text x="570" y="451" fill="#6ea8fe" text-anchor="middle">→</text>
-    <rect x="594" y="420" width="300" height="48" rx="10" fill="#223052" stroke="#3b4f7a"/>
-    <text x="744" y="451" fill="#e6ecff" text-anchor="middle">samples + parameters</text>
-    <text x="912" y="451" fill="#6ea8fe" text-anchor="middle">→</text>
-    <rect x="936" y="420" width="200" height="48" rx="10" fill="#2b3d6b" stroke="#6ea8fe"/>
-    <text x="1036" y="451" fill="#ffffff" text-anchor="middle">.fspro</text>
+  <!-- resolution chain -->
+  <g font-family="Consolas, monospace" font-size="21" font-weight="600">
+    <rect x="80" y="418" width="166" height="50" rx="10" fill="#1e293b" stroke="#3b4f7a"/>
+    <text x="163" y="450" fill="#e2e8f0" text-anchor="middle">.bank</text>
+    <text x="267" y="450" fill="#60a5fa" text-anchor="middle">→</text>
+
+    <rect x="288" y="418" width="268" height="50" rx="10" fill="#1e293b" stroke="#3b4f7a"/>
+    <text x="422" y="450" fill="#e2e8f0" text-anchor="middle">strings → events</text>
+    <text x="577" y="450" fill="#60a5fa" text-anchor="middle">→</text>
+
+    <rect x="598" y="418" width="320" height="50" rx="10" fill="#1e293b" stroke="#3b4f7a"/>
+    <text x="758" y="450" fill="#e2e8f0" text-anchor="middle">samples + parameters</text>
+    <text x="939" y="450" fill="#60a5fa" text-anchor="middle">→</text>
+
+    <rect x="960" y="418" width="240" height="50" rx="10" fill="#273660" stroke="#60a5fa" stroke-width="1.5"/>
+    <text x="1080" y="450" fill="#ffffff" text-anchor="middle">.fspro project</text>
   </g>
 
   <!-- feature chips -->
-  <g font-size="22" fill="#c9d3e6">
-    <rect x="80" y="510" width="270" height="42" rx="21" fill="none" stroke="#3b4f7a"/>
-    <text x="215" y="538" text-anchor="middle">zero core dependencies</text>
-    <rect x="366" y="510" width="270" height="42" rx="21" fill="none" stroke="#3b4f7a"/>
-    <text x="501" y="538" text-anchor="middle">vanilla backfill (--game)</text>
-    <rect x="652" y="510" width="270" height="42" rx="21" fill="none" stroke="#3b4f7a"/>
-    <text x="787" y="538" text-anchor="middle">parameter sheets</text>
-    <rect x="938" y="510" width="262" height="42" rx="21" fill="none" stroke="#3b4f7a"/>
-    <text x="1069" y="538" text-anchor="middle">FMOD Studio 2.02</text>
+  <g font-size="20" fill="#cbd5e1">
+    <rect x="80" y="508" width="272" height="42" rx="21" fill="#0f172a" fill-opacity="0.65" stroke="#334155"/>
+    <text x="216" y="535" text-anchor="middle">zero core dependencies</text>
+
+    <rect x="368" y="508" width="272" height="42" rx="21" fill="#0f172a" fill-opacity="0.65" stroke="#334155"/>
+    <text x="504" y="535" text-anchor="middle">vanilla backfill (--game)</text>
+
+    <rect x="656" y="508" width="272" height="42" rx="21" fill="#0f172a" fill-opacity="0.65" stroke="#334155"/>
+    <text x="792" y="535" text-anchor="middle">init · check · catalog</text>
+
+    <rect x="944" y="508" width="256" height="42" rx="21" fill="#0f172a" fill-opacity="0.65" stroke="#334155"/>
+    <text x="1072" y="535" text-anchor="middle">single Windows .exe</text>
   </g>
 </svg>
