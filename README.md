@@ -135,16 +135,31 @@ my-mod/
     └── sound/      your built .bank (+ .assets.bank) files
 ```
 
-Build only the banks you changed, drop them into `mod/sound/`, then validate
+The game does not merge a partial mod: with `enable_mod:b=yes` it checks that
+**every bank** of `config/sound_studio.blk` without `optional:b=true` (47
+banks in the Sky Odyssey build: `masterbank*`, all `aircraft_*`, `tanks_*`,
+`ships_*` and their `.assets` pairs) exists in `sound/mod/<any folder>/`. The
+first missing one switches the whole mod off (`Sound.MOD disabled: modded bank
+is missing`) and the game plays vanilla sound. So ship the full set — the
+vanilla banks copied unchanged plus the ones you rebuilt — and validate
 before sharing:
 
 ```sh
-rebank check my-mod/mod/sound --game "$WT/sound"
+rebank check my-mod/mod/sound --game "$WT/sound" \
+    --studio-blk /tmp/wt_aces/aces.vromfs.bin_u/config/sound_studio.blk
 ```
 
 It reports events that were renamed or dropped versus the game bank (both
-break the mod) and banks the game does not know. Exit code is non-zero on
+break the mod), banks the game does not know and — with `--studio-blk` —
+banks the game requires but the folder lacks. Without `--studio-blk` it warns
+about metadata banks whose `<name>.assets.bank` exists in the game but not in
+the mod (vanilla samples are used for those). Exit code is non-zero on
 problems, so it fits a build script.
+
+Banks are built as split pairs (`.bank` = metadata, `.assets.bank` = sample
+data), exactly as the official project does (`Workspace` → "Build metadata
+and assets to separate banks"); both halves of a rebuilt bank go into the
+mod folder.
 
 The reference project covers **107 of the 139** banks the game ships; the
 rest (localised dialogs, `infantry_*`, `football`) are not in it. For those,

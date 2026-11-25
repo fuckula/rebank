@@ -874,19 +874,96 @@ def catalog(game_dir, out_path=None, csv_path=None):
     return text
 
 
-def check_mod(mod_dir, game_dir):
+def required_banks_from_blk(text):
+    """config/sound_studio.blk -> {'folder', 'extension', 'required': [...], 'optional': [...]}.
+    The game switches the whole sound mod off when any bank of
+    banks/presets/master without optional:b=true is missing from sound/mod/
+    ("Sound.MOD disabled: modded bank is missing")."""
+    tokens = re.findall(r'"[^"]*"|[{}]|[^\s{}"]+', text)
+    stack = [[]]
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t == '{':
+            # anonymous block: attach to the previous name when there is one
+            i += 1
+            continue
+        if t == '}':
+            if len(stack) > 1:
+                stack.pop()
+            i += 1
+            continue
+        if i + 1 < len(tokens) and tokens[i + 1] == '{':
+            node = []
+            stack[-1].append((t, node))
+            stack.append(node)
+            i += 2
+            continue
+        parts = []
+        while i < len(tokens) and tokens[i] not in '{}':
+            parts.append(tokens[i])
+            i += 1
+            if parts[-1] == '=':
+                if i < len(tokens) and tokens[i] not in '{}':
+                    parts.append(tokens[i])
+                    i += 1
+                break
+            if parts[-1].startswith('='):
+                break
+        m = re.match(r'([\w.]+):([a-z]\w*)\s*=\s*(.*)', ''.join(parts))
+        if m:
+            stack[-1].append(('param', m.group(1), m.group(3).strip('"')))
+    root = stack[0]
+
+    def child(node, name):
+        return next((n[1] for n in node if len(n) == 2 and n[0] == name), [])
+
+    banks = child(root, 'banks')
+    master = child(child(banks, 'presets'), 'master')
+    req, opt = [], []
+    for n in master:
+        if len(n) != 2:
+            continue
+        optional = any(p == 'optional' and v == 'true' for q in n[1] if len(q) == 3 for p, v in [(q[1], q[2])])
+        (opt if optional else req).append(n[0])
+    params = {n[1]: n[2] for n in banks if len(n) == 3}
+    return {'folder': params.get('folder', 'sound'), 'extension': params.get('extension', '.bank'),
+            'required': req, 'optional': opt}
+
+
+def check_mod(mod_dir, game_dir, studio_blk=None):
     """Check the built mod banks against the game: bank names, event names and their
-    bank membership must not change (Gaijin rules). -> (ok, report)"""
+    bank membership must not change (Gaijin rules), and the mod must be complete
+    enough for the game to switch it on. -> (ok, report)
+
+    studio_blk: text of config/sound_studio.blk (unpacked from aces.vromfs.bin).
+    With it every non-optional bank of banks/presets/master must be present in
+    mod_dir; without it the game sound folder is used: each shipped .bank whose
+    pair <name>.assets.bank exists must come with that pair."""
     strings = parse_strings_bank(os.path.join(game_dir, 'masterbank.strings.bank'))
     problems = []
+    warnings = []
     banks = sorted(p for p in os.listdir(mod_dir) if p.endswith('.bank') and not p.endswith('.assets.bank'))
     if not banks:
         return False, 'no .bank files in %s' % mod_dir
+    if studio_blk:
+        req = required_banks_from_blk(studio_blk)
+        missing = [n + req['extension'] for n in req['required']
+                   if not os.path.exists(os.path.join(mod_dir, n + req['extension']))]
+        if missing:
+            problems.append('%d required bank(s) missing: the game switches the whole mod off '
+                            '("Sound.MOD disabled: modded bank is missing") until all of them are '
+                            'present: %s' % (len(missing), ', '.join(missing[:8])
+                                             + (' ...' if len(missing) > 8 else '')))
     for name in banks:
         ref = os.path.join(game_dir, name)
         if not os.path.exists(ref):
             problems.append('%s: bank does not exist in the game — the game will ignore it' % name)
             continue
+        if not studio_blk and os.path.exists(os.path.join(game_dir, name[:-5] + '.assets.bank')) \
+                and not os.path.exists(os.path.join(mod_dir, name[:-5] + '.assets.bank')):
+            warnings.append('%s: the game ships %s.assets.bank; the mod has only the metadata half — '
+                            'vanilla samples are used' % (name, name[:-5]))
         try:
             _, mine, _, _, _, _ = parse_bank(os.path.join(mod_dir, name))
             _, theirs, _, _, _, _ = parse_bank(ref)
@@ -904,7 +981,8 @@ def check_mod(mod_dir, game_dir):
             problems.append('%s: %d event(s) not in the game bank (ignored or unknown): %s'
                             % (name, len(extra), ', '.join(sorted(extra)[:5])))
     ok = not problems
-    return ok, '\n'.join(['%s: %s' % ('OK' if ok else 'PROBLEMS', mod_dir)] + problems)
+    lines = ['%s: %s' % ('OK' if ok else 'PROBLEMS', mod_dir)] + problems + ['warning: ' + w for w in warnings]
+    return ok, '\n'.join(lines)
 
 
 def init_mod(dest, reference=None, game_dir=None, clone=True):
@@ -944,8 +1022,12 @@ def init_mod(dest, reference=None, game_dir=None, clone=True):
             'mod/sound/  put built .bank (+ .assets.bank) files here; the game loads them\n'
             '            from <game>/sound/mod/ with enable_mod:b=yes in config.blk\n\n'
             'Rules (Gaijin): keep event names, folder layout, bank names and mixer\n'
-            'buses unchanged. Build only the banks you changed.\n\n'
-            'Validate before sharing:  rebank check mod/sound "<game>/sound"\n'
+            'buses unchanged.\n\n'
+            'The game switches the whole mod off unless every bank it requires is present\n'
+            'in sound/mod/<folder>/ (47 banks in the Sky Odyssey build: masterbank*, all\n'
+            'aircraft_*, tanks_*, ships_* and their .assets pairs). Copy the vanilla banks\n'
+            'you do not change unchanged and replace only the ones you rebuilt.\n\n'
+            'Validate before sharing:  rebank check mod/sound "<game>/sound" --studio-blk <sound_studio.blk>\n'
             'Import vanilla events missing from the reference project (e.g. RWR alarms):\n'
             '  rebank "<game>/sound/aircraft_gui.bank" -a "<game>/sound/aircraft_gui.assets.bank" --fspro --apply\n'
             % REFERENCE_STUDIO)
@@ -968,8 +1050,11 @@ def _workflow_command(cmd, argv):
     if cmd == 'check':
         sp.add_argument('mod_dir', help='folder with built mod .bank files (e.g. mod/sound)')
         sp.add_argument('--game', required=True, help='game sound dir to compare against')
+        sp.add_argument('--studio-blk', help='config/sound_studio.blk unpacked from aces.vromfs.bin: '
+                         'also verifies that every bank the game requires is present in mod_dir')
         a = sp.parse_args(argv)
-        ok, report = check_mod(a.mod_dir, a.game)
+        blk = open(a.studio_blk, encoding='utf-8', errors='replace').read() if a.studio_blk else None
+        ok, report = check_mod(a.mod_dir, a.game, studio_blk=blk)
         print(report)
         return 0 if ok else 1
     # catalog
