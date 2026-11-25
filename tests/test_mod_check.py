@@ -51,6 +51,11 @@ class SoundStudioBlk(unittest.TestCase):
         self.assertEqual(req['optional'], ['dialogs'])
 
 
+def _write_bytes(path, data):
+    with open(path, 'wb') as f:
+        f.write(data)
+
+
 class CheckMod(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -59,10 +64,9 @@ class CheckMod(unittest.TestCase):
         os.makedirs(self.game)
         os.makedirs(self.mod)
         g = b'\x11' * 16
-        open(os.path.join(self.game, 'masterbank.strings.bank'), 'wb').write(b'strings')
         for name in ('masterbank.strings', 'masterbank', 'aircraft_gui', 'aircraft_gui.assets', 'dialogs'):
-            open(os.path.join(self.game, name + '.bank'), 'wb').write(b'bank:' + name.encode())
-        open(os.path.join(self.mod, 'aircraft_gui.bank'), 'wb').write(b'bank:aircraft_gui')
+            _write_bytes(os.path.join(self.game, name + '.bank'), b'bank:' + name.encode())
+        _write_bytes(os.path.join(self.mod, 'aircraft_gui.bank'), b'bank:aircraft_gui')
         # the bank parsers are covered by tests.test_primitives; here they return the same event for every file
         self._orig = (U.parse_strings_bank, U.parse_bank)
         U.parse_strings_bank = lambda path: {g: 'event:/aircraft/gui/test'}
@@ -85,7 +89,7 @@ class CheckMod(unittest.TestCase):
 
     def test_full_set_passes(self):
         for name in ('masterbank.strings', 'masterbank', 'aircraft_gui.assets'):
-            open(os.path.join(self.mod, name + '.bank'), 'wb').write(b'bank:' + name.encode())
+            _write_bytes(os.path.join(self.mod, name + '.bank'), b'bank:' + name.encode())
         ok, report = U.check_mod(self.mod, self.game, studio_blk=BLK)
         self.assertTrue(ok, report)
 
@@ -99,7 +103,7 @@ class CheckMod(unittest.TestCase):
 
     def test_assets_pair_is_checked_without_blk(self):
         # aircraft_gui has an .assets.bank in the game, but the mod ships the metadata half only
-        open(os.path.join(self.game, 'extra.bank'), 'wb').write(b'bank:extra')
+        _write_bytes(os.path.join(self.game, 'extra.bank'), b'bank:extra')
         ok, report = U.check_mod(self.mod, self.game)
         self.assertTrue(ok)  # metadata-only is a warning, not an error
         self.assertIn('aircraft_gui.assets.bank', report)

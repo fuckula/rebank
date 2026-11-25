@@ -28,10 +28,11 @@ Options:
   --apply                write files (without it only reports are written)
 
 Example:
-  fbu RWSM/aircraft_gui.bank --fspro --game "C:/.../War Thunder/sound" --apply
+  rebank RWSM/aircraft_gui.bank --fspro --game "C:/.../War Thunder/sound" --apply
 """
 import argparse
 import csv
+import ctypes
 import json
 import os
 import re
@@ -42,6 +43,27 @@ import sys
 import uuid
 import wave
 from collections import defaultdict
+from xml.sax.saxutils import escape as _xml_escape
+
+__version__ = '0.1.1'
+
+
+def _read_bytes(path):
+    with open(path, 'rb') as f:
+        return f.read()
+
+
+def _read_text(path):
+    with open(path, encoding='utf-8', errors='replace') as f:
+        return f.read()
+
+
+def _write_text(path, text):
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
 
 # ------------------------------------------------------------------ RIFF/GUID
 
@@ -92,7 +114,7 @@ def read_array(buf, off):
 
 def parse_strings_bank(path):
     """GUID (raw 16 bytes) -> path (event:/..., bus:/...)."""
-    data = open(path, 'rb').read()
+    data = _read_bytes(path)
     stdt = None
     for p, cid, sz, typ in walk_chunks(data, 12, len(data)):
         if cid == b'LIST' and typ == b'PROJ':
@@ -145,7 +167,7 @@ def parse_strings_bank(path):
 class Bank:
     def __init__(self, path):
         self.path = path
-        self.data = d = open(path, 'rb').read()
+        self.data = d = _read_bytes(path)
         if d[:4] != b'RIFF' or d[8:12] != b'FEV ':
             raise ValueError('%s: not an FMOD FEV bank' % path)
         self.fmt_version = struct.unpack('<I', d[20:24])[0]
@@ -196,8 +218,9 @@ def parse_bank(path):
         plst, inst, muib = rec.get(b'PLST'), rec.get(b'INST'), rec.get(b'MUIB')
         if not plst:
             continue
-        cnt = struct.unpack('<H', plst[8:10])[0] >> 1
-        items = [plst[12+20*i:12+20*i+16] for i in range(cnt)]
+        cnt_raw, plst_off = read_varint(plst, 8)
+        cnt = cnt_raw >> 1
+        items = [plst[plst_off + 2 + 20 * i:plst_off + 2 + 20 * i + 16] for i in range(cnt)]
         muits.append({'tg': inst[0:16] if inst else None, 'items': items,
                       'guid': muib[:16] if muib else None})
     wavs = []     # waveform descriptors
@@ -384,7 +407,8 @@ def _xml_obj(cls, oid, body=''):
 
 
 def _prop(name, val):
-    return '\t\t<property name="%s">\n\t\t\t<value>%s</value>\n\t\t</property>\n' % (name, val)
+    return '\t\t<property name="%s">\n\t\t\t<value>%s</value>\n\t\t</property>\n' % (
+        _xml_escape(str(name)), _xml_escape(str(val)))
 
 
 def _rel(name, *dests):
@@ -429,9 +453,9 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
     ws_g, m_ef, m_tf, m_epf, m_pf, m_bf, m_sf, m_af = (W() for _ in range(8))
     mixer_g, prof_g, plat_g, snap_g, master_bus, bank_g = (W() for _ in range(6))
 
-    open(os.path.join(out_dir, bank_name + '.fspro'), 'w', encoding='utf-8').write(
-        '<?xml version="1.0" encoding="UTF-8"?>\n<objects serializationModel="%s" />\n' % model)
-    open(os.path.join(meta, 'Workspace.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(out_dir, bank_name + '.fspro'),
+                '<?xml version="1.0" encoding="UTF-8"?>\n<objects serializationModel="%s" />\n' % model)
+    _write_text(os.path.join(meta, 'Workspace.xml'), _xml(model,
         _xml_obj('Workspace', ws_g,
             _prop('builtBanksOutputDirectory', 'Build') + _prop('builtBanksSeparateAssets', 'true') +
             _prop('builtBanksMirrorBrowserFolderHierarchy', 'true') +
@@ -441,18 +465,18 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             _rel('masterAssetFolder', m_af) + _rel('mixer', mixer_g) +
             _rel('profilerSessionFolder', prof_g) + _rel('platforms', plat_g))))
     mef_chain, mef_pan, mef_fader = W(), W(), W()
-    open(os.path.join(meta, 'Master.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(meta, 'Master.xml'), _xml(model,
         _xml_obj('MixerMaster', master_bus,
                  _prop('name', 'Master Bus') + _rel('effectChain', mef_chain) +
                  _rel('panner', mef_pan) + _rel('mixer', mixer_g)),
         _xml_obj('MixerBusEffectChain', mef_chain, _rel('effects', mef_fader)),
         _xml_obj('MixerBusPanner', mef_pan, _prop('overridingOutputFormat', 6)),
         _xml_obj('MixerBusFader', mef_fader)))
-    open(os.path.join(meta, 'Mixer.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(meta, 'Mixer.xml'), _xml(model,
         _xml_obj('Mixer', mixer_g, _rel('masterBus', master_bus) + _rel('snapshotList', snap_g))))
-    open(os.path.join(meta, 'Tags.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(meta, 'Tags.xml'), _xml(model,
         _xml_obj('MasterTagFolder', m_tf, _prop('name', 'Master'))))
-    open(os.path.join(meta, 'SnapshotGroup', snap_g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(meta, 'SnapshotGroup', snap_g + '.xml'), _xml(model,
         _xml_obj('SnapshotList', snap_g, _rel('mixer', mixer_g))))
     singletons = (('MasterAssetFolder', m_af, 'Asset', None),
                   ('MasterBankFolder', m_bf, 'BankFolder', None),
@@ -462,22 +486,23 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
                   ('ProfilerSessionFolder', prof_g, 'ProfilerFolder', None),
                   ('MasterEventFolder', m_ef, 'EventFolder', 'Master'))
     for cls, g, folder, nm in singletons:
-        open(os.path.join(meta, folder, g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+        _write_text(os.path.join(meta, folder, g + '.xml'), _xml(model,
             _xml_obj(cls, g, _prop('name', nm) if nm else '')))
-    open(os.path.join(meta, 'Platform', plat_g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(meta, 'Platform', plat_g + '.xml'), _xml(model,
         _xml_obj('Platform', plat_g, _prop('hardwareType', 0) + _prop('name', 'Desktop') +
                  _prop('subDirectory', 'sound') + _prop('speakerFormat', 6))))
     enc_g = W()
-    open(os.path.join(meta, 'EncodingSetting', enc_g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(meta, 'EncodingSetting', enc_g + '.xml'), _xml(model,
         _xml_obj('EncodingSetting', enc_g, _prop('encodingFormat', 3) + _prop('quality', 37) +
                  _rel('platform', plat_g) + _rel('encodable', plat_g))))
-    open(os.path.join(meta, 'Bank', bank_g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+    _write_text(os.path.join(meta, 'Bank', bank_g + '.xml'), _xml(model,
         _xml_obj('Bank', bank_g, _prop('name', bank_name) + _rel('folder', m_bf))))
 
     # events -> instruments (same code for own events and for the vanilla backfill)
     folder_guids = {}
     preset_cache = {}
     audio_guids = {}
+    audio_facts = {}
     counter = {'events': 0, 'audiofiles': 0}
 
     def ensure_folder(parts):
@@ -487,8 +512,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             acc = acc + '/' + seg if acc else seg
             if acc not in folder_guids:
                 folder_guids[acc] = W()
-                open(os.path.join(meta, 'EventFolder', folder_guids[acc] + '.xml'),
-                     'w', encoding='utf-8').write(_xml(model,
+                _write_text(os.path.join(meta, 'EventFolder', folder_guids[acc] + '.xml'), _xml(model,
                     _xml_obj('EventFolder', folder_guids[acc],
                              _prop('name', seg) + _rel('folder', parent))))
             parent = folder_guids[acc]
@@ -503,7 +527,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
         ensure_asset_dir(os.path.dirname(rel_dir).replace('\\', '/'))
         g = W()
         asset_dirs[rel_dir] = g
-        open(os.path.join(meta, 'Asset', g + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+        _write_text(os.path.join(meta, 'Asset', g + '.xml'), _xml(model,
             _xml_obj('EncodableAsset', g, _prop('assetPath', rel_dir + '/') +
                      _rel('masterAssetFolder', m_af))))
 
@@ -515,22 +539,36 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             dst = os.path.join(out_dir, 'Assets', *rel_path.split('/'))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             src = audio_map[key]
-            if open(src, 'rb').read(4) != b'RIFF':
+            with open(src, 'rb') as sf:
+                header = sf.read(4)
+            if header != b'RIFF':
                 # ogg (decoded by python-fsb5) -> PCM wav through ffmpeg, otherwise
                 # Studio marks the asset as damaged
+                if not shutil.which('ffmpeg'):
+                    raise SystemExit('!! ffmpeg not found on PATH — install ffmpeg to convert Vorbis samples to WAV')
                 subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', src,
                                 '-c:a', 'pcm_s16le', dst], check=True)
             else:
                 shutil.copy2(src, dst)
             hz, ch, dur = wav_facts(dst)
-            open(os.path.join(meta, 'AudioFile', ag + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+            _write_text(os.path.join(meta, 'AudioFile', ag + '.xml'), _xml(model,
                 _xml_obj('AudioFile', ag,
                          _prop('assetPath', rel_path) + _prop('frequencyInKHz', '%.7f' % hz) +
                          _prop('channelCount', ch) + _prop('length', '%.10f' % dur) +
                          _rel('masterAssetFolder', m_af))))
             audio_guids[key] = ag
+            audio_facts[key] = dur
             counter['audiofiles'] += 1
         return audio_guids[key]
+
+    def emit_single(epath, key, audio_map):
+        sg = W()
+        ag = sound_guid(epath, key, audio_map)
+        dur = audio_facts.get(key, 0.0)
+        xml = _xml_obj('SingleSound', sg,
+                       _prop('length', '%g' % max(1.0, round(dur, 3))) +
+                       _rel('audioFile', ag))
+        return sg, xml
 
     def emit_event(eg, epath, ev_mods, audio_map, sheets=None):
         """ev_mods: [('S', [key]) | ('M', [keys])] — track instruments of the event in
@@ -551,20 +589,16 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
         # plays one random sound instead of both.
         for kind, keys in ev_mods:
             if kind == 'S':
-                sg = W()
-                sounds_xml += _xml_obj('SingleSound', sg,
-                    _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[keys[0]])[2], 3))) +
-                    _rel('audioFile', sound_guid(epath, keys[0], audio_map)))
+                sg, sxml = emit_single(epath, keys[0], audio_map)
+                sounds_xml += sxml
                 multi_groups.append(sg)
             else:
                 mg = W()
                 gdests = []
                 for key in keys:
-                    sg = W()
+                    sg, sxml = emit_single(epath, key, audio_map)
                     gdests.append(sg)
-                    sounds_xml += _xml_obj('SingleSound', sg,
-                        _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
-                        _rel('audioFile', sound_guid(epath, key, audio_map)))
+                    sounds_xml += sxml
                 sounds_xml += _xml_obj('MultiSound', mg, _rel('sounds', *gdests))
                 multi_groups.append(mg)
         params_rel = ''
@@ -578,8 +612,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             if pg not in preset_cache:
                 gparam, gpreset = W(), W()
                 preset_cache[pg] = (gparam, gpreset)
-                open(os.path.join(meta, 'ParameterPreset', gpreset + '.xml'), 'w',
-                     encoding='utf-8').write(_xml(model,
+                _write_text(os.path.join(meta, 'ParameterPreset', gpreset + '.xml'), _xml(model,
                     _xml_obj('ParameterPreset', gpreset, _prop('name', pname) +
                              _rel('folder', m_pf) + _rel('parameter', gparam)),
                     _xml_obj('GameParameter', gparam,
@@ -600,26 +633,19 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             # 1906 proxy-module events). The proxy binds the parameter, the
             # group track is the audio track the module plays on; without it
             # Studio marks the module invalid and drops it from the bank.
+            # ParameterProxy.modules wraps each sheet entry in a MultiSound (matching
+            # FMOD Studio 2.02 serialization and Gaijin's reference project).
             proxy_modules = []
             for mods in grps:
-                for kind, keys in mods:
-                    if kind == 'W':
-                        sg = W()
-                        proxy_modules.append(sg)
-                        sounds_xml += _xml_obj('SingleSound', sg,
-                            _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[keys[0]])[2], 3))) +
-                            _rel('audioFile', sound_guid(epath, keys[0], audio_map)))
-                    else:
-                        mg = W()
-                        proxy_modules.append(mg)
-                        gdests = []
-                        for key in keys:
-                            sg = W()
-                            gdests.append(sg)
-                            sounds_xml += _xml_obj('SingleSound', sg,
-                                _prop('length', '%g' % max(1.0, round(wav_facts(audio_map[key])[2], 3))) +
-                                _rel('audioFile', sound_guid(epath, key, audio_map)))
-                        sounds_xml += _xml_obj('MultiSound', mg, _rel('sounds', *gdests))
+                for _kind, keys in mods:
+                    mg = W()
+                    proxy_modules.append(mg)
+                    gdests = []
+                    for key in keys:
+                        sg, sxml = emit_single(epath, key, audio_map)
+                        gdests.append(sg)
+                        sounds_xml += sxml
+                    sounds_xml += _xml_obj('MultiSound', mg, _rel('sounds', *gdests))
             proxy_xml += _xml_obj('ParameterProxy', proxy,
                                   _rel('modules', *proxy_modules) + _rel('preset', gparam))
             # one group track per parameter sheet ("layer00", "layer01", ...)
@@ -653,7 +679,7 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
                 _xml_obj('MixerBusFader', gfader) + group_xml
         mods_rel = _rel('modules', *multi_groups) if multi_groups else ''
         groups_rel = _rel('groupTracks', *group_tracks)
-        open(os.path.join(meta, 'Event', guid_str(eg) + '.xml'), 'w', encoding='utf-8').write(_xml(model,
+        _write_text(os.path.join(meta, 'Event', guid_str(eg) + '.xml'), _xml(model,
             _xml_obj('Event', guid_str(eg), _prop('name', parts[-1]) + _prop('outputFormat', 2) +
                      _rel('folder', parent) + _rel('mixer', emix) + _rel('masterTrack', mtrk) +
                      _rel('mixerInput', minp) + _rel('automatableProperties', aprops) +
@@ -724,32 +750,66 @@ def generate_fspro(out_dir, bank_name, events, strings, waits, muits, tg2ev,
             'events_without_name': len(events) - counter['events']}
 
 
-def decode_game_fsbs(assets_path, out_root):
-    """Decode every FSB5 of the paired assets bank into <out>/_game_audio/<bank>[N]/.
-    -> ('g', fsb, index) -> file. Needs python-fsb5 (+libogg/libvorbis from pyogg)."""
+def _configure_vorbis_dlls():
+    """Ensure python-fsb5 finds libogg/libvorbis from bin/ or pyogg without copying to cwd."""
+    roots = [os.path.dirname(os.path.abspath(__file__))]
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        roots.insert(0, meipass)
+    candidates = [os.path.join(r, 'bin') for r in roots]
+    try:
+        import pyogg
+        candidates.append(os.path.dirname(pyogg.__file__))
+    except ImportError:
+        pass
+    dll_dirs = [d for d in candidates if os.path.isdir(d) and os.path.exists(os.path.join(d, 'libvorbis.dll'))]
+    if not dll_dirs:
+        return
+    for d in dll_dirs:
+        if hasattr(os, 'add_dll_directory'):
+            os.add_dll_directory(d)
+    os.environ['PATH'] = os.pathsep.join(dll_dirs) + os.pathsep + os.environ.get('PATH', '')
+    import fsb5.utils as _fsb_utils
+    if getattr(_fsb_utils.load_lib, '_rebank_wrapped', False):
+        return
+    orig_load = _fsb_utils.load_lib
+
+    def _load_lib(*names):
+        for name in names:
+            for d in dll_dirs:
+                cand = os.path.join(d, 'lib%s.dll' % name)
+                if os.path.exists(cand):
+                    return ctypes.CDLL(cand)
+        return orig_load(*names)
+
+    _load_lib._rebank_wrapped = True
+    _fsb_utils.load_lib = _load_lib
+
+
+def merge_split_wavs(wavs, awavs):
+    """Merge WAV descriptors from a metadata .bank and its paired .assets.bank by GUID."""
+    merged = [dict(w) for w in wavs]
+    by_guid = {w['guid']: w for w in merged}
+    for w in awavs:
+        if w['guid'] in by_guid:
+            by_guid[w['guid']]['index'] = w['index']
+        else:
+            item = dict(w)
+            merged.append(item)
+            by_guid[item['guid']] = item
+    return merged
+
+
+def decode_game_fsbs(assets_path, out_root, prefix='g', subdir='_game_audio'):
+    """Decode every FSB5 of a bank/assets bank into <out>/<subdir>/<bank>[N]/.
+    -> (prefix, fsb, index) -> file. Needs python-fsb5 (+libogg/libvorbis)."""
     try:
         import fsb5
     except ImportError:
-        print('!! python-fsb5 is not installed — provide vanilla wavs and pass --game-wav')
+        flag = '--game-wav' if prefix == 'g' else '--rename-dir'
+        print('!! python-fsb5 is not installed — provide wavs and pass %s' % flag)
         return {}
-    here = os.path.dirname(os.path.abspath(__file__))
-    for src_dir in (os.path.join(here, 'bin'),):
-        for dll in ('libogg.dll', 'libvorbis.dll'):
-            src = os.path.join(src_dir, dll)
-            if os.path.exists(src) and not os.path.exists(os.path.join(os.getcwd(), dll)):
-                try:
-                    shutil.copy2(src, dll)
-                except OSError:
-                    pass
-    try:
-        import pyogg
-        for dll in ('libogg.dll', 'libvorbis.dll'):
-            src = os.path.join(os.path.dirname(pyogg.__file__), dll)
-            if os.path.exists(src) and not os.path.exists(os.path.join(here, 'bin', dll)):
-                shutil.copy2(src, os.path.join(here, 'bin', dll))
-                shutil.copy2(src, dll)
-    except ImportError:
-        pass
+    _configure_vorbis_dlls()
     from enum import IntEnum
     members = [(m.name, m.value) for m in fsb5.SoundFormat]
     if 'FADPCM' not in fsb5.SoundFormat.__members__:
@@ -760,11 +820,11 @@ def decode_game_fsbs(assets_path, out_root):
         NewSF.is_pcm = property(lambda s: s.value == 16 or _pcm(s))
         fsb5.SoundFormat = NewSF
     _, _, _, _, _, fsbs = parse_bank(assets_path)
-    data = open(assets_path, 'rb').read()
+    data = _read_bytes(assets_path)
     base = os.path.splitext(os.path.basename(assets_path))[0]
     out = {}
     for i, f in enumerate(fsbs):
-        outdir = os.path.join(out_root, '_game_audio', '%s[%d]' % (base, i))
+        outdir = os.path.join(out_root, subdir, '%s[%d]' % (base, i))
         os.makedirs(outdir, exist_ok=True)
         bank = fsb5.FSB5(data[f['offset']:f['offset'] + f['size']])
         for n, s in enumerate(bank.samples):
@@ -775,8 +835,9 @@ def decode_game_fsbs(assets_path, out_root):
                 continue
             ext = fsb5.SoundFormat(int(bank.header.mode)).file_extension
             path = os.path.join(outdir, 'sound_%d.%s' % (n, ext))
-            open(path, 'wb').write(blob)
-            out[('g', i, n)] = path
+            with open(path, 'wb') as wf:
+                wf.write(blob)
+            out[(prefix, i, n)] = path
         print('  decoded %s[%d]: %d' % (base, i, len(bank.samples)))
     return out
 
@@ -825,22 +886,59 @@ def _bank_event_params(bank_obj, ev):
     return names
 
 
-def catalog(game_dir, out_path=None, csv_path=None):
+EVENT_GROUPS = (
+    ('aircraft', 'Aircraft', 'Aircraft airframes, cockpits, RWR/MLWS alarms, engines, guns and weapons'),
+    ('tanks', 'Tanks & Ground Vehicles', 'Ground vehicle engines, tracks, turrets, weapons and effects'),
+    ('ships', 'Ships & Naval', 'Naval engines, wakes, effects and shipboard weapons'),
+    ('infantry', 'Infantry', 'Infantry ambient, foley, weapons, UAV and effects'),
+    ('crew', 'Crew Dialogs', 'Common, ground and naval crew voice dialogs'),
+    ('dialogs', 'Radio & Chat Dialogs', 'Localized radio chat and battle voice dialogs'),
+    ('misc', 'Master, Events & Other', 'Master bank, special event modes, football and empty/assets-only banks'),
+)
+
+
+def _event_bank_group(bank_name):
+    if bank_name == 'aircraft' or bank_name.startswith('aircraft_'):
+        return 'aircraft'
+    if bank_name == 'tanks' or bank_name.startswith('tanks_'):
+        return 'tanks'
+    if bank_name == 'ships' or bank_name.startswith('ships_'):
+        return 'ships'
+    if bank_name == 'infantry' or bank_name.startswith('infantry_'):
+        return 'infantry'
+    if bank_name.startswith('crew_'):
+        return 'crew'
+    if bank_name == 'dialogs' or bank_name.startswith('dialogs_'):
+        return 'dialogs'
+    return 'misc'
+
+
+def _format_empty_banks_section(empty_banks):
+    lines = ['## Empty / assets-only banks', '',
+             'Banks with `0` named events in `masterbank.strings.bank` (typically localized voice containers or assets-only banks):',
+             '', '| Bank | Events | Waveforms |', '| --- | ---: | ---: |']
+    for item in empty_banks:
+        lines.append('| `%s` | %d | %d |' % (item['name'], item['events'], item['waveforms']))
+    lines.append('')
+    return lines
+
+
+def catalog(game_dir, out_path=None, csv_path=None, split_dir=None):
     """Catalog of every game bank: events, parameters, sample count -> Markdown (+CSV)."""
-    strings = parse_strings_bank(os.path.join(game_dir, 'masterbank.strings.bank'))
+    strings_path = os.path.join(game_dir, 'masterbank.strings.bank')
+    if not os.path.exists(strings_path):
+        return False, 'masterbank.strings.bank not found in %s' % game_dir
+    strings = parse_strings_bank(strings_path)
     banks = sorted(p for p in os.listdir(game_dir)
                    if p.endswith('.bank') and not p.endswith(('.assets.bank', '.strings.bank')))
-    rows, lines = [], ['# War Thunder sound banks', '',
-                       'Generated by `rebank catalog`. One row per event; parameters are the',
-                       'game parameters the event reacts to. Do not rename events, paths,',
-                       'banks or mixer buses in a sound mod.', '']
+    rows, populated, empty, unreadable = [], [], [], []
     for name in banks:
         path = os.path.join(game_dir, name)
         base = name[:-5]
         try:
             b, events, _w, _m, wavs, _f = parse_bank(path)
         except Exception as e:  # noqa: BLE001 — catalog must not die on one bad bank
-            lines.append('## %s — unreadable (%s)' % (base, e))
+            unreadable.append((base, str(e)))
             continue
         assets = os.path.join(game_dir, base + '.assets.bank')
         n_wav = len(wavs)
@@ -850,20 +948,111 @@ def catalog(game_dir, out_path=None, csv_path=None):
             except Exception:  # noqa: BLE001
                 pass
         named = [(strings[e], e) for e in events if e in strings and strings[e].startswith('event:/')]
-        lines += ['## %s' % base, '',
-                  '%d events (%d named), %d waveforms.' % (len(events), len(named), n_wav), '',
-                  '| Event | Parameters |', '|---|---|']
+        ev_rows = []
         for p, e in sorted(named):
             ps = ', '.join(_bank_event_params(b, e))
-            lines.append('| `%s` | %s |' % (p, ps))
+            ev_rows.append((p, ps))
             rows.append((base, p, ps))
-        lines.append('')
-    text = '\n'.join(lines)
+        entry = {'name': base, 'group': _event_bank_group(base), 'events': len(events),
+                 'named': len(named), 'waveforms': n_wav, 'rows': ev_rows}
+        (populated if ev_rows else empty).append(entry)
+
+    total_events = sum(len(x['rows']) for x in populated)
+    total_banks = len(populated) + len(empty)
+
+    if split_dir:
+        out_dir = os.path.dirname(os.path.abspath(out_path)) if out_path else os.getcwd()
+        rel_split = os.path.relpath(os.path.abspath(split_dir), out_dir).replace('\\', '/')
+        os.makedirs(split_dir, exist_ok=True)
+        index_name = os.path.basename(out_path) if out_path else 'EVENTS.md'
+        rel_index = os.path.relpath(os.path.join(out_dir, index_name), os.path.abspath(split_dir)).replace('\\', '/')
+        by_group = defaultdict(list)
+        for item in populated:
+            by_group[item['group']].append(item)
+
+        idx = ['# War Thunder sound banks', '',
+               '> [!NOTE]',
+               '> Generated by `rebank catalog --split`. Do not rename events, paths, banks, or mixer buses in a sound mod.',
+               '',
+               '**%d total banks** (%d with named events, %d empty/assets-only) · **%d named events**.'
+               % (total_banks, len(populated), len(empty), total_events),
+               '',
+               'Split by bank group so every file stays well under GitHub\'s 512 KB rendering limit.',
+               '',
+               '## Bank groups', '',
+               '| Group | Banks | Named events | Catalog | Description |',
+               '| --- | ---: | ---: | --- | --- |']
+        for gid, title, desc in EVENT_GROUPS:
+            items = by_group.get(gid, [])
+            grp_events = sum(len(x['rows']) for x in items)
+            grp_banks = len(items) + (len(empty) if gid == 'misc' else 0)
+            idx.append('| **%s** | %d | %d | [`%s/%s.md`](%s/%s.md) | %s |'
+                       % (title, grp_banks, grp_events, rel_split, gid, rel_split, gid, desc))
+
+            g_lines = ['[← Events Index](%s)' % rel_index, '',
+                       '# %s — sound events' % title, '',
+                       '%s. **%d populated bank(s)** · **%d named events**.' % (desc, len(items), grp_events), '']
+            if items:
+                g_lines += ['| Bank | Named events | Waveforms |', '| --- | ---: | ---: |']
+                for it in items:
+                    g_lines.append('| [`%s`](#%s) | %d | %d |' % (it['name'], it['name'].lower(), it['named'], it['waveforms']))
+                g_lines.append('')
+                for it in items:
+                    g_lines += ['## %s' % it['name'], '',
+                                '%d events (%d named), %d waveforms.' % (it['events'], it['named'], it['waveforms']), '',
+                                '| Event | Parameters |', '| --- | --- |']
+                    for p, ps in it['rows']:
+                        g_lines.append('| `%s` | %s |' % (p, ps))
+                    g_lines.append('')
+            if gid == 'misc' and empty:
+                g_lines += _format_empty_banks_section(empty)
+            _write_text(os.path.join(split_dir, gid + '.md'), '\n'.join(g_lines).rstrip('\n') + '\n')
+
+        idx += ['', '## Populated banks directory', '',
+                '| Bank | Group | Events | Named | Waveforms | Link |',
+                '| --- | --- | ---: | ---: | ---: | --- |']
+        group_titles = {gid: title for gid, title, _ in EVENT_GROUPS}
+        for it in sorted(populated, key=lambda x: x['name']):
+            gid = it['group']
+            idx.append('| `%s` | %s | %d | %d | %d | [%s/%s.md#%s](%s/%s.md#%s) |'
+                       % (it['name'], group_titles[gid], it['events'], it['named'], it['waveforms'],
+                          rel_split, gid, it['name'].lower(), rel_split, gid, it['name'].lower()))
+        if empty:
+            idx += ['', '## Empty / assets-only banks (%d)' % len(empty), '',
+                    'See [`%s/misc.md#empty--assets-only-banks`](%s/misc.md#empty--assets-only-banks) for the full list of %d banks with 0 named events.'
+                    % (rel_split, rel_split, len(empty))]
+        if unreadable:
+            idx += ['', '## Unreadable banks', '']
+            for base, err in unreadable:
+                idx.append('- `%s`: %s' % (base, err))
+        text = '\n'.join(idx).rstrip('\n') + '\n'
+    else:
+        lines = ['# War Thunder sound banks', '',
+                 'Generated by `rebank catalog`. One row per event; parameters are the',
+                 'game parameters the event reacts to. Do not rename events, paths,',
+                 'banks or mixer buses in a sound mod.', '',
+                 '**%d total banks** (%d with named events, %d empty/assets-only) · **%d named events**.'
+                 % (total_banks, len(populated), len(empty), total_events), '']
+        for it in populated:
+            lines += ['## %s' % it['name'], '',
+                      '%d events (%d named), %d waveforms.' % (it['events'], it['named'], it['waveforms']), '',
+                      '| Event | Parameters |', '| --- | --- |']
+            for p, ps in it['rows']:
+                lines.append('| `%s` | %s |' % (p, ps))
+            lines.append('')
+        if empty:
+            lines += _format_empty_banks_section(empty)
+        for base, err in unreadable:
+            lines.append('## %s — unreadable (%s)' % (base, err))
+        text = '\n'.join(lines).rstrip('\n') + '\n'
+
     if out_path:
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-        open(out_path, 'w', encoding='utf-8', newline='\n').write(text)
+        _write_text(out_path, text)
         print('catalog:', out_path)
     if csv_path:
+        parent = os.path.dirname(os.path.abspath(csv_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
             w = csv.writer(f)
             w.writerow(['bank', 'event', 'parameters'])
@@ -940,7 +1129,10 @@ def check_mod(mod_dir, game_dir, studio_blk=None):
     With it every non-optional bank of banks/presets/master must be present in
     mod_dir; without it the game sound folder is used: each shipped .bank whose
     pair <name>.assets.bank exists must come with that pair."""
-    strings = parse_strings_bank(os.path.join(game_dir, 'masterbank.strings.bank'))
+    strings_path = os.path.join(game_dir, 'masterbank.strings.bank')
+    if not os.path.exists(strings_path):
+        return False, 'masterbank.strings.bank not found in %s' % game_dir
+    strings = parse_strings_bank(strings_path)
     problems = []
     warnings = []
     banks = sorted(p for p in os.listdir(mod_dir) if p.endswith('.bank') and not p.endswith('.assets.bank'))
@@ -1008,7 +1200,7 @@ def init_mod(dest, reference=None, game_dir=None, clone=True):
             return 1
     readme = os.path.join(ref_dir, 'Readme.md')
     if os.path.exists(readme):
-        m = re.search(r'Fmod Studio version\s*[-—]\s*([\d.]+)', open(readme, encoding='utf-8').read())
+        m = re.search(r'Fmod Studio version\s*[-—]\s*([\d.]+)', _read_text(readme))
         ver = m.group(1) if m else '?'
         print('reference project: FMOD Studio %s (expected %s)%s'
               % (ver, REFERENCE_STUDIO, '' if ver == REFERENCE_STUDIO else '  !! version mismatch — update the clone'))
@@ -1016,7 +1208,7 @@ def init_mod(dest, reference=None, game_dir=None, clone=True):
     os.makedirs(mod_sound, exist_ok=True)
     notes = os.path.join(dest, 'mod', 'README.txt')
     if not os.path.exists(notes):
-        open(notes, 'w', encoding='utf-8').write(
+        _write_text(notes,
             'ReBank mod workspace\n'
             '====================\n\n'
             'reference/  official Gaijin FMOD Studio project (open sounds.fspro in FMOD Studio %s)\n'
@@ -1054,7 +1246,7 @@ def _workflow_command(cmd, argv):
         sp.add_argument('--studio-blk', help='config/sound_studio.blk unpacked from aces.vromfs.bin: '
                          'also verifies that every bank the game requires is present in mod_dir')
         a = sp.parse_args(argv)
-        blk = open(a.studio_blk, encoding='utf-8', errors='replace').read() if a.studio_blk else None
+        blk = _read_text(a.studio_blk) if a.studio_blk else None
         ok, report = check_mod(a.mod_dir, a.game, studio_blk=blk)
         print(report)
         return 0 if ok else 1
@@ -1062,8 +1254,15 @@ def _workflow_command(cmd, argv):
     sp.add_argument('game_dir', help='game sound dir')
     sp.add_argument('-o', '--out', help='write Markdown here (default: docs/EVENTS.md in cwd)')
     sp.add_argument('--csv', help='also write CSV')
+    sp.add_argument('--split', action='store_true',
+                    help='split catalog into <out_dir>/events/*.md (default when -o is omitted)')
+    sp.add_argument('--split-dir', help='custom directory for split event group files')
     a = sp.parse_args(argv)
-    catalog(a.game_dir, a.out or os.path.join('docs', 'EVENTS.md'), a.csv)
+    out_path = a.out or os.path.join('docs', 'EVENTS.md')
+    split_dir = a.split_dir
+    if not split_dir and (a.split or not a.out):
+        split_dir = os.path.join(os.path.dirname(os.path.abspath(out_path)), 'events')
+    catalog(a.game_dir, out_path, a.csv, split_dir=split_dir)
     return 0
 
 def main():
@@ -1075,6 +1274,7 @@ def main():
                     'Subcommands: init, check, catalog (see: rebank <cmd> -h).',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='example:\n  rebank aircraft_gui.bank --fspro --game "C:/Games/War Thunder/sound" --apply')
+    ap.add_argument('-V', '--version', action='version', version='%(prog)s ' + __version__)
     ap.add_argument('bank', help='FMOD Studio .bank (FEV) file')
     ap.add_argument('-s', '--strings', help='*.strings.bank (default: masterbank.strings.bank next to the bank)')
     ap.add_argument('-a', '--assets',
@@ -1094,7 +1294,7 @@ def main():
     ap.add_argument('--game-wav', action='append', default=[],
                     help='pre-extracted vanilla sound_N.wav folders (alternative to decoding)')
     ap.add_argument('--apply', action='store_true',
-                    help='write files (without it only reports are written)')
+                    help='copy/rename --rename-dir wavs into the event tree (otherwise prints plan only)')
     args = ap.parse_args()
     bank_path = args.bank
     strings_path = args.strings or os.path.join(
@@ -1107,16 +1307,13 @@ def main():
         print('!! strings.bank not found (%s): names "?"' % strings_path)
 
     bank, events, waits, muits, wavs, fsbs = parse_bank(bank_path)
+    fsb_data = bank.data
     if args.assets:
         # vanilla layout: events in X.bank, samples (WAVS+FSB) in X.assets.bank
-        _, _, _, _, awavs, afsbs = parse_bank(args.assets)
-        by_guid = {w['guid']: w for w in wavs}
-        for w in awavs:
-            if w['guid'] in by_guid:
-                by_guid[w['guid']]['index'] = w['index']
-            else:
-                wavs.append(w)
+        abank, _, _, _, awavs, afsbs = parse_bank(args.assets)
+        wavs = merge_split_wavs(wavs, awavs)
         fsbs = afsbs
+        fsb_data = abank.data
         bank.name = bank.name.replace('.assets', '')
         print('assets merged: %s (+%d waveforms, fsb=%d)' %
               (os.path.basename(args.assets), len(awavs), len(fsbs)))
@@ -1138,9 +1335,11 @@ def main():
                 print('!! no folder', d)
                 continue
             for f in os.listdir(d):
-                m = re.match(r'sound_(\d+)\.wav$', f)
+                m = re.match(r'sound_(\d+)\.(wav|ogg)$', f, re.I)
                 if m:
                     audio_map.setdefault(('v', d_idx, int(m.group(1))), os.path.join(d, f))
+        if not audio_map and fsbs:
+            audio_map = decode_game_fsbs(args.assets or bank_path, out_root, prefix='v', subdir='_audio')
         if not audio_map and fsbs:
             # no wavs of our own (Fmod Bank Tools was not run) — decode them ourselves
             audio_map = decode_game_fsbs(args.assets or bank_path, out_root)
@@ -1154,7 +1353,7 @@ def main():
                 _, _, _, _, gawavs, _ = parse_bank(gassets)
                 gwg2 = {}
                 seen = defaultdict(int)
-                gw = gwavs + gawavs
+                gw = merge_split_wavs(gwavs, gawavs)
                 for wrec in gw:
                     seen[wrec['index']] += 1
                     gwg2[wrec['guid']] = (seen[wrec['index']] - 1, wrec)
@@ -1170,7 +1369,7 @@ def main():
                 _filled = {_ev_owner.get(tg2ev.get(t), tg2ev.get(t)) for t in _tgs}
                 _filled |= set(getattr(bank, 'ev_slots', {}))
                 _filled.discard(None)
-                n_fill = 0
+                n_wav = 0
                 # vanilla wav/ogg: --game-wav folders (one per FSB of the assets bank);
                 # if empty — decode through python-fsb5 (+libogg/libvorbis from pyogg)
                 g_audio = {}
@@ -1221,19 +1420,23 @@ def main():
                         vanilla_events.append((ge, gp, mods, sheets))  # absent from the mod — emit
                     for key in [k for _kind, ks in mods for k in ks] + \
                             [k for _pg, _pm, groups in sheets for grp in groups for _kd, ks in grp for k in ks]:
+                        if key not in g_audio:
+                            continue
                         src = g_audio[key]
                         rel = gp.replace('event:/', '') + '/%03d_vanilla.wav' % key[2]
                         dst = os.path.join(van_dir, *rel.split('/'))
                         os.makedirs(os.path.dirname(dst), exist_ok=True)
                         shutil.copy2(src, dst)
                         audio_map[('g', key[1], key[2])] = dst
-                    n_fill += 1
-                print('vanilla backfill: %d events, %d wav' % (len(vanilla_fill) + len(vanilla_events), n_fill))
-    out_root = args.out or (os.path.splitext(bank_path)[0] + '_unwrapped')
+                        n_wav += 1
+                print('vanilla backfill: %d events, %d wav' % (len(vanilla_fill) + len(vanilla_events), n_wav))
     os.makedirs(out_root, exist_ok=True)
 
     # CSV report
     csv_path = args.csv or os.path.join(out_root, bank.name + '_samples.csv')
+    csv_parent = os.path.dirname(os.path.abspath(csv_path))
+    if csv_parent:
+        os.makedirs(csv_parent, exist_ok=True)
     with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
         w = csv.writer(f)
         w.writerow(['fsb', 'index', 'waveform_guid', 'field', 'events'])
@@ -1247,9 +1450,13 @@ def main():
 
     # JSON map: "0_123" -> [event paths]
     json_path = args.json_out or os.path.join(out_root, bank.name + '_names.json')
-    json.dump({'%d_%d' % k: sorted(strings.get(e, guid_str(e)) for e in v)
-               for k, v in sample_events.items()},
-              open(json_path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    json_parent = os.path.dirname(os.path.abspath(json_path))
+    if json_parent:
+        os.makedirs(json_parent, exist_ok=True)
+    with open(json_path, 'w', encoding='utf-8') as jf:
+        json.dump({'%d_%d' % k: sorted(strings.get(e, guid_str(e)) for e in v)
+                   for k, v in sample_events.items()},
+                  jf, ensure_ascii=False, indent=1)
     print('json:', json_path)
 
     # FSB dump
@@ -1257,21 +1464,23 @@ def main():
         os.makedirs(args.fsb_dir, exist_ok=True)
         for i, fb in enumerate(fsbs):
             dst = os.path.join(args.fsb_dir, '%s[%d].fsb' % (bank.name, i))
-            open(dst, 'wb').write(bank.data[fb['offset']:fb['offset']+fb['size']])
+            with open(dst, 'wb') as ff:
+                ff.write(fsb_data[fb['offset']:fb['offset'] + fb['size']])
             print('fsb:', dst)
 
     # Lay sound_N.wav out along the event tree
     if args.rename_dir:
-        copied = skipped = 0
+        copied = planned = skipped = 0
         for d_idx, d in enumerate(args.rename_dir):
             if not os.path.isdir(d):
                 print('!! no folder', d)
                 continue
             for f in os.listdir(d):
-                m = re.match(r'sound_(\d+)\.wav$', f)
+                m = re.match(r'sound_(\d+)\.(wav|ogg)$', f, re.I)
                 if not m:
                     continue
                 idx = int(m.group(1))
+                ext = m.group(2).lower()
                 evs = sample_events.get((d_idx, idx)) or sample_events.get((0, idx))
                 if not evs:
                     skipped += 1
@@ -1283,7 +1492,7 @@ def main():
                     # GUID event without a name in strings -> quarantine
                     parts, leaf = ['_unmatched'], primary
                 sub = os.path.join(out_root, *parts) if parts else out_root
-                dst = os.path.join(sub, '%03d_%s.wav' % (idx, leaf))
+                dst = os.path.join(sub, '%03d_%s.%s' % (idx, leaf, ext))
                 os.makedirs(sub, exist_ok=True)
                 src = os.path.join(d, f)
                 if args.apply:
@@ -1291,8 +1500,11 @@ def main():
                     copied += 1
                 else:
                     print('plan: %s -> %s' % (src, os.path.relpath(dst, out_root)))
-        print('%s: %d files%s' % ('copied' if args.apply else 'plan', copied if args.apply else skipped,
-                                   '' if args.apply else ' (without --apply this is only a plan)'))
+                    planned += 1
+        if args.apply:
+            print('copied: %d files (skipped %d)' % (copied, skipped))
+        else:
+            print('plan: %d files (skipped %d; pass --apply to copy)' % (planned, skipped))
 
     # FMOD Studio project
     if args.fspro:
@@ -1309,7 +1521,7 @@ def main():
     if args.diff:
         report = diff_against(bank_path, args.diff, strings)
         diff_path = os.path.join(out_root, bank.name + '_diff.txt')
-        open(diff_path, 'w', encoding='utf-8').write(report)
+        _write_text(diff_path, report)
         print('diff:', diff_path)
         print(report.splitlines()[1] if len(report.splitlines()) > 1 else report)
     print('done: %s' % out_root)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the per-type vehicle → sound tables and the weapon table under docs/.
+"""Build the per-type vehicle -> sound tables and the weapon table under docs/.
 
 Reads the text output of wt_ext_cli for aces.vromfs.bin. The banks cannot
 tell which vehicle plays which sound; the game data can:
@@ -18,11 +18,11 @@ a container (pylon) resolves one level down to the missile it holds.
 
 Weapon presets (`sound`, `sound_inside`, `sfxReloadBullet`, `guidanceSfx`,
 `cockpit/outside/ai/charge`) resolve to events through `sound_path` /
-`sound_pathStudio` (see SOUND_REFS.md). Torpedoes and human weapons carry
+`sound_pathStudio` (see docs/SOUND_REFS.md). Torpedoes and human weapons carry
 no sound fields (native code).
 
     python scripts/vehicle_table.py <type> GAMEDATA_DIR -o docs/<TYPE>.md [--find f_16] [--csv]
-    type: aircraft | helicopters | tanks | ships | weapons
+    python scripts/vehicle_table.py aircraft GAMEDATA_DIR --all -o docs [--split-weapons]
 """
 import argparse
 import csv
@@ -70,10 +70,25 @@ WEAPON_HEAD = ['Weapon', 'Folder', 'Type', 'Sound', 'Inside', 'Cockpit', 'Outsid
 WEAPON_DIRS = ('groundmodels_weapons', 'navalmodels_weapons', 'rocketguns', 'bombguns',
                'payloadguns', 'torpedoes', 'containers', 'equipment', 'mines', 'drop_tank',
                'angular_limits_tv_weapons', 'human_weapons')
+PYLON_PREFIXES = ('ter_', 'bru_', 'mer_', 'lau_', 'dummy')
+
+FLIGHT_HEAD = ['Flight model', 'RWR indicator', 'Sensors', 'RWR / MLWS events',
+               'Engine', 'Gun', 'Turret turn', 'Nozzle']
+GROUND_HEAD = ['Vehicle', 'Type', 'Engine', 'Engine (AI)', 'Tracks / wake', 'Tracks (cockpit)',
+               'Tracks (AI)', 'Turret turn', 'Gun turn', 'Backfire', 'Horn']
+DOC_NAME = {'aircraft': 'AIRCRAFT', 'helicopters': 'HELICOPTERS', 'tanks': 'TANKS', 'ships': 'SHIPS'}
+DOCS_NAV = '[← Docs](README.md) · [Vehicle Weapons](VEHICLE_WEAPONS.md) · [Weapons](WEAPONS.md) · [Sound Refs](SOUND_REFS.md) · [Events](EVENTS.md)'
 
 
-def read(path):
-    return open(path, encoding='utf-8', errors='replace').read()
+def read_text(path):
+    with open(path, encoding='utf-8', errors='replace') as f:
+        return f.read()
+
+
+def write_text(path, text):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
 
 
 def block(text, name):
@@ -92,15 +107,16 @@ def core_name(base):
     return re.sub(r'_(default|user|ai|tmc)$', '', base, count=1)
 
 
-def weapon_refs(text, sounding=frozenset()):
+def weapon_refs(text, sounding=frozenset(), weapon_cache=None):
     """Weapon blocks a vehicle mounts, by `blk:t`; containers resolve one level
     down to the missile they hold. Only blocks in `sounding` (those with a sound
     preset, matched by lower-case basename) are kept, pylon launchers are
     dropped. -> [core name, deduplicated]"""
+    cache = weapon_cache or {}
     out = []
     for ref in re.findall(r'blk:t\s*=\s*"gamedata/weapons/([^"]+)"', text):
         base = ref[:-4] if ref.endswith('.blk') else ref
-        for cand in (base, WEAPON_CACHE.get(base) or WEAPON_CACHE.get(os.path.basename(base))):
+        for cand in (base, cache.get(base) or cache.get(os.path.basename(base))):
             if not cand or cand.startswith(PYLON_PREFIXES):
                 continue
             if os.path.basename(cand).lower() not in sounding:
@@ -111,24 +127,21 @@ def weapon_refs(text, sounding=frozenset()):
     return out
 
 
-WEAPON_CACHE = {}   # weapon blk name -> missile blk name it contains (containers)
-SOUNDING = {}       # weapon blk name (lower case) -> True when it carries a sound preset
-PYLON_PREFIXES = ('ter_', 'bru_', 'mer_', 'lau_', 'dummy')
-
-
 def load_weapon_cache(gamedata):
+    cache = {}
     for sub in WEAPON_DIRS:
         for f in glob.glob(os.path.join(gamedata, 'weapons', sub, '*.blk')):
             name = os.path.basename(f)[:-4]
-            m = re.search(r'blk:t\s*=\s*"gamedata/weapons/([^"]+)"', read(f))
+            m = re.search(r'blk:t\s*=\s*"gamedata/weapons/([^"]+)"', read_text(f))
             if m:
-                WEAPON_CACHE[name] = m.group(1)[:-4] if m.group(1).endswith('.blk') else m.group(1)
+                cache[name] = m.group(1)[:-4] if m.group(1).endswith('.blk') else m.group(1)
+    return cache
 
 
 def load_sensors(gamedata):
     sensors = {}
     for f in glob.glob(os.path.join(gamedata, 'sensors', '*.blk')):
-        t = read(f)
+        t = read_text(f)
         sfx = re.search(r'^\s*signalSfxName:t\s*=\s*"([^"]+)"', t, re.M)
         nm = re.search(r'^\s*name:t\s*=\s*"([^"]+)"', t, re.M)
         if sfx:
@@ -137,14 +150,15 @@ def load_sensors(gamedata):
     return sensors
 
 
-def flight_rows(gamedata, find, helicopters):
+def flight_rows(gamedata, find, helicopters, sounding=frozenset(), weapon_cache=None, vehicle_weapons=None):
     sensors = load_sensors(gamedata)
     rows = []
+    vw = vehicle_weapons if vehicle_weapons is not None else {}
     for f in sorted(glob.glob(os.path.join(gamedata, 'flightmodels', '*.blk'))):
         name = os.path.basename(f)[:-4]
         if find and find.lower() not in name.lower():
             continue
-        t = read(f)
+        t = read_text(f)
         if ('helicopter {' in t) != helicopters:
             continue
         found = [sensors[b] for b in sorted(set(re.findall(r'blk:t\s*=\s*"(gamedata/sensors/[^"]+)"', t)))
@@ -159,38 +173,39 @@ def flight_rows(gamedata, find, helicopters):
         ind = re.search(r'^rwrIndicator:t\s*=\s*"([^"]+)"', t, re.M)
         rows.append([name, ind.group(1) if ind else '', ', '.join(names), ', '.join(sfx)]
                     + [field(snd, k) for k, _ in FLIGHT_FIELDS])
-        VEHICLE_WEAPONS.setdefault(('helicopters' if helicopters else 'aircraft'), []).append(
-            (name, ', '.join(weapon_refs(t, SOUNDING))))
+        vw.setdefault(('helicopters' if helicopters else 'aircraft'), []).append(
+            (name, ', '.join(weapon_refs(t, sounding, weapon_cache))))
     return rows
 
 
-def ground_rows(gamedata, find, subdirs):
+def ground_rows(gamedata, find, subdirs, sounding=frozenset(), weapon_cache=None, vehicle_weapons=None):
     rows = []
+    vw = vehicle_weapons if vehicle_weapons is not None else {}
     for sub in subdirs:
         for f in sorted(glob.glob(os.path.join(gamedata, 'units', sub, '*.blk'))):
             name = os.path.basename(f)[:-4]
             if find and find.lower() not in name.lower():
                 continue
-            t = read(f)
+            t = read_text(f)
             if not re.search(r'^sound \{', t, re.M):
                 continue
             snd = block(t, 'sound')
             typ = re.search(r'^type:t\s*=\s*"([^"]+)"', t, re.M)
             rows.append([name, (typ.group(1) if typ else '').removeprefix('type')]
                         + [field(snd, k) for k, _ in GROUND_FIELDS])
-            VEHICLE_WEAPONS.setdefault(('ships' if sub == 'ships' else 'tanks'), []).append(
-                (name, ', '.join(weapon_refs(t, SOUNDING))))
+            vw.setdefault(('ships' if sub == 'ships' else 'tanks'), []).append(
+                (name, ', '.join(weapon_refs(t, sounding, weapon_cache))))
     return rows
 
 
-def weapon_rows(gamedata, find):
+def weapon_rows(gamedata, find, sounding=None):
     rows = []
     for sub in WEAPON_DIRS:
         for f in sorted(glob.glob(os.path.join(gamedata, 'weapons', sub, '*.blk'))):
             name = os.path.basename(f)[:-4]
             if find and find.lower() not in name.lower():
                 continue
-            t = read(f)
+            t = read_text(f)
             # one column per header; keys sharing a header (charge, reload) merge, first wins
             col = {}
             for k, h in WEAPON_FIELDS:
@@ -199,98 +214,124 @@ def weapon_rows(gamedata, find):
                     col[h] = v
             if not col:
                 continue
-            SOUNDING[name.lower()] = True
+            if sounding is not None:
+                sounding[name.lower()] = True
             typ = re.search(r'^type:t\s*=\s*"([^"]+)"', t, re.M)
             rows.append([name, sub, typ.group(1) if typ else '']
                         + [col.get(h, '') for h in WEAPON_HEAD[3:]])
     return rows
 
 
-VEHICLE_WEAPONS = {}   # vehicle type -> [(vehicle, 'core weapon, …')]
-
-
-def write_vehicle_weapons(out):
-    """docs/VEHICLE_WEAPONS.md: every vehicle and the sounding weapons it mounts."""
+def write_vehicle_weapons(out, vehicle_weapons, split_dir=None):
+    """docs/VEHICLE_WEAPONS.md (+ optional docs/vehicle_weapons/*.md): every vehicle and the sounding weapons it mounts."""
     title = {'aircraft': 'Aircraft', 'helicopters': 'Helicopters', 'tanks': 'Tanks', 'ships': 'Ships'}
-    lines = ['# Vehicle → weapons', '',
-             'Which sounding weapon blocks (WEAPONS.md) each vehicle mounts, by `blk:t`; containers '
-             'resolve one level down to the missile they hold, pylon launchers are dropped and '
-             '`_default/_user/_ai/_tmc` variants collapse to the core name. Generated by '
-             '`scripts/vehicle_table.py`.', '']
-    for typ in ('aircraft', 'helicopters', 'tanks', 'ships'):
-        rows = VEHICLE_WEAPONS.get(typ, [])
-        if not rows:
-            continue
-        lines += ['## %s' % title[typ], '', '| Vehicle | Weapons |', '|---|---|']
-        lines += ['| `%s` | %s |' % r for r in rows]
-        lines.append('')
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    open(out, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines).rstrip('\n') + '\n')
-    print('vehicle_weapons: %s (%d vehicles)' % (out, sum(len(v) for v in VEHICLE_WEAPONS.values())))
+    total = sum(len(v) for v in vehicle_weapons.values())
+    if split_dir:
+        out_dir = os.path.dirname(os.path.abspath(out))
+        rel_split = os.path.relpath(os.path.abspath(split_dir), out_dir).replace('\\', '/')
+        os.makedirs(split_dir, exist_ok=True)
+        idx = [
+            DOCS_NAV, '',
+            '# Vehicle → weapons', '',
+            'Which sounding weapon blocks ([WEAPONS.md](WEAPONS.md)) each vehicle mounts, by `blk:t`; containers '
+            'resolve one level down to the missile they hold, pylon launchers are dropped and '
+            '`_default/_user/_ai/_tmc` variants collapse to the core name. Generated by `scripts/vehicle_table.py`.', '',
+            '**%d total vehicles** split by category so every table stays under GitHub\'s 512 KB rendering cap.' % total, '',
+            '| Category | Vehicles | Table |', '| --- | ---: | --- |',
+        ]
+        for typ in ('aircraft', 'helicopters', 'tanks', 'ships'):
+            rows = vehicle_weapons.get(typ, [])
+            if not rows:
+                continue
+            idx.append('| **%s** | %d | [`%s/%s.md`](%s/%s.md) |' % (title[typ], len(rows), rel_split, typ, rel_split, typ))
+            sub_lines = [
+                '[← Vehicle Weapons](../VEHICLE_WEAPONS.md) · [Weapons](../WEAPONS.md) · [← Docs](../README.md)', '',
+                '# %s → mounted sounding weapons' % title[typ], '',
+                '**%d vehicles**. See [WEAPONS.md](../WEAPONS.md) for each weapon\'s fire/reload/guidance sound presets.' % len(rows), '',
+                '| Vehicle | Weapons |', '| --- | --- |',
+            ]
+            sub_lines += ['| `%s` | %s |' % r for r in rows]
+            write_text(os.path.join(split_dir, typ + '.md'), '\n'.join(sub_lines) + '\n')
+        write_text(out, '\n'.join(idx) + '\n')
+    else:
+        lines = [
+            DOCS_NAV, '',
+            '# Vehicle → weapons', '',
+            'Which sounding weapon blocks ([WEAPONS.md](WEAPONS.md)) each vehicle mounts, by `blk:t`; containers '
+            'resolve one level down to the missile they hold, pylon launchers are dropped and '
+            '`_default/_user/_ai/_tmc` variants collapse to the core name. Generated by '
+            '`scripts/vehicle_table.py`.', '',
+        ]
+        for typ in ('aircraft', 'helicopters', 'tanks', 'ships'):
+            rows = vehicle_weapons.get(typ, [])
+            if not rows:
+                continue
+            lines += ['## %s' % title[typ], '', '| Vehicle | Weapons |', '| --- | --- |']
+            lines += ['| `%s` | %s |' % r for r in rows]
+            lines.append('')
+        write_text(out, '\n'.join(lines).rstrip('\n') + '\n')
+    print('vehicle_weapons: %s (%d vehicles)' % (out, total))
 
-
-FLIGHT_HEAD = ['Flight model', 'RWR indicator', 'Sensors', 'RWR / MLWS events',
-               'Engine', 'Gun', 'Turret turn', 'Nozzle']
-GROUND_HEAD = ['Vehicle', 'Type', 'Engine', 'Engine (AI)', 'Tracks / wake', 'Tracks (cockpit)',
-               'Tracks (AI)', 'Turret turn', 'Gun turn', 'Backfire', 'Horn']
 
 TYPES = {
     'aircraft': dict(
         title='Aircraft → sound events and weapons',
         intro='Per flight model (no top-level `helicopter {` block): RWR indicator, mounted sensors, '
               'the `alarm_radar_*` / `alarm_launch_detected_*` events they name (`signalSfxName`) '
-              'and the sound sets selected in `Sound { }`. Mounted weapons: VEHICLE_WEAPONS.md.',
+              'and the sound sets selected in `Sound { }`. Mounted weapons: [VEHICLE_WEAPONS.md](VEHICLE_WEAPONS.md).',
         head=FLIGHT_HEAD,
-        run=lambda g, find: flight_rows(g, find, helicopters=False)),
+        run=lambda g, find, **kw: flight_rows(g, find, helicopters=False, **kw)),
     'helicopters': dict(
         title='Helicopters → sound events and weapons',
-        intro='Per flight model with a top-level `helicopter {` block; same columns as the aircraft table.',
+        intro='Per flight model with a top-level `helicopter {` block; same columns as the [aircraft table](AIRCRAFT.md). '
+              'Mounted weapons: [VEHICLE_WEAPONS.md](VEHICLE_WEAPONS.md).',
         head=FLIGHT_HEAD,
-        run=lambda g, find: flight_rows(g, find, helicopters=True)),
+        run=lambda g, find, **kw: flight_rows(g, find, helicopters=True, **kw)),
     'tanks': dict(
         title='Tanks → sound presets and weapons',
         intro='Per ground vehicle (`units/tankmodels`, `tracked_vehicles`, `wheeled_vehicles`): the '
               '`sound { }` presets — engine, AI engine, tracks, turret and gun turn, backfire. '
-              'Presets resolve to events through `sound_path` / `TrackSoundPath` (SOUND_REFS.md); '
-              'mounted weapons: VEHICLE_WEAPONS.md.',
+              'Presets resolve to events through `sound_path` / `TrackSoundPath` ([SOUND_REFS.md](SOUND_REFS.md)); '
+              'mounted weapons: [VEHICLE_WEAPONS.md](VEHICLE_WEAPONS.md).',
         head=GROUND_HEAD,
-        run=lambda g, find: ground_rows(g, find, ('tankmodels', 'tracked_vehicles', 'wheeled_vehicles'))),
+        run=lambda g, find, **kw: ground_rows(g, find, ('tankmodels', 'tracked_vehicles', 'wheeled_vehicles'), **kw)),
     'ships': dict(
         title='Ships → sound presets and weapons',
         intro='Per ship (`units/ships`): the `sound { }` presets — engine, AI engine, wake/track, '
-              'turret and gun turn. Mounted weapons: VEHICLE_WEAPONS.md.',
+              'turret and gun turn. Mounted weapons: [VEHICLE_WEAPONS.md](VEHICLE_WEAPONS.md).',
         head=GROUND_HEAD,
-        run=lambda g, find: ground_rows(g, find, ('ships',))),
+        run=lambda g, find, **kw: ground_rows(g, find, ('ships',), **kw)),
     'weapons': dict(
         title='Weapons → sound presets',
         intro='Per weapon block under `gamedata/weapons/` that carries sound fields: fire sound, '
               'interior variant, reload, guidance tone, and the `sound_path` that resolves the preset '
-              'to an event (`<sound_path>/<sound>`; see SOUND_REFS.md). Containers list no sound of '
+              'to an event (`<sound_path>/<sound>`; see [SOUND_REFS.md](SOUND_REFS.md)). Containers list no sound of '
               'their own; the missile they hold is a separate row. Torpedoes and human weapons carry '
               'no sound fields (native code).',
         head=WEAPON_HEAD,
-        run=weapon_rows),
+        run=lambda g, find, **kw: weapon_rows(g, find)),
 }
 
 
-def write_table(typ, gamedata, find, out):
+def write_table(typ, gamedata, find, out, sounding=frozenset(), weapon_cache=None, vehicle_weapons=None):
     """One Markdown table for `typ` into `out`; columns empty in every row are dropped."""
     spec = TYPES[typ]
-    rows = spec['run'](gamedata, find)
+    rows = spec['run'](gamedata, find, sounding=sounding, weapon_cache=weapon_cache, vehicle_weapons=vehicle_weapons)
     keep = [i for i in range(len(spec['head'])) if i == 0 or any(r[i] for r in rows)]
     head = [spec['head'][i] for i in keep]
-    lines = ['# ' + spec['title'], '', spec['intro'], '',
-             'Generated by `scripts/vehicle_table.py %s`.' % typ, '',
-             '| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
+    lines = [
+        DOCS_NAV, '',
+        '# ' + spec['title'], '',
+        spec['intro'], '',
+        'Generated by `scripts/vehicle_table.py %s` (**%d rows**).' % (typ, len(rows)), '',
+        '| ' + ' | '.join(head) + ' |',
+        '|' + '---|' * len(head),
+    ]
     lines += ['| ' + ' | '.join(('`%s`' % c) if i == 0 else c for i, c in enumerate([r[k] for k in keep])) + ' |'
               for r in rows]
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    open(out, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')
+    write_text(out, '\n'.join(lines) + '\n')
     print('%s: %s (%d rows)' % (typ, out, len(rows)))
     return rows
-
-
-DOC_NAME = {'aircraft': 'AIRCRAFT', 'helicopters': 'HELICOPTERS', 'tanks': 'TANKS', 'ships': 'SHIPS'}
 
 
 def main():
@@ -301,21 +342,31 @@ def main():
     ap.add_argument('--csv', help='also write CSV')
     ap.add_argument('--all', dest='all_types', action='store_true',
                     help='with -o DIR: write every vehicle table plus VEHICLE_WEAPONS.md into DIR')
+    ap.add_argument('--split-weapons', action='store_true',
+                    help='with --all: split VEHICLE_WEAPONS.md into <out>/vehicle_weapons/*.md')
     ap.add_argument('--find', help='only rows whose first column contains this (case-insensitive)')
     a = ap.parse_args()
     gamedata = a.gamedata.replace('\\', '/')
     if not os.path.isdir(os.path.join(gamedata, 'flightmodels')) and a.type in ('aircraft', 'helicopters'):
         raise SystemExit('!! no flightmodels folder under %s (unpack aces.vromfs.bin with wt_ext_cli first)' % gamedata)
-    load_weapon_cache(gamedata)
-    weapon_rows(gamedata, None)   # fills SOUNDING so vehicles list only sounding weapons
+    weapon_cache = load_weapon_cache(gamedata)
+    sounding = {}
+    weapon_rows(gamedata, None, sounding=sounding)   # fills sounding so vehicles list only sounding weapons
+    vehicle_weapons = {}
     if a.all_types:
         if not a.out:
             ap.error('--all needs -o DIR')
         for typ in ('aircraft', 'helicopters', 'tanks', 'ships'):
-            write_table(typ, gamedata, a.find, os.path.join(a.out, DOC_NAME[typ] + '.md'))
-        write_vehicle_weapons(os.path.join(a.out, 'VEHICLE_WEAPONS.md'))
+            write_table(typ, gamedata, a.find, os.path.join(a.out, DOC_NAME[typ] + '.md'),
+                        sounding=sounding, weapon_cache=weapon_cache, vehicle_weapons=vehicle_weapons)
+        vw_out = os.path.join(a.out, 'VEHICLE_WEAPONS.md')
+        split_dir = os.path.join(a.out, 'vehicle_weapons') if a.split_weapons else None
+        write_vehicle_weapons(vw_out, vehicle_weapons, split_dir=split_dir)
         return
-    rows = write_table(a.type, gamedata, a.find, a.out) if a.out else TYPES[a.type]['run'](gamedata, a.find)
+    rows = (write_table(a.type, gamedata, a.find, a.out, sounding=sounding,
+                        weapon_cache=weapon_cache, vehicle_weapons=vehicle_weapons)
+            if a.out else TYPES[a.type]['run'](gamedata, a.find, sounding=sounding,
+                                               weapon_cache=weapon_cache, vehicle_weapons=vehicle_weapons))
     if not a.out:
         print(' | '.join(TYPES[a.type]['head']))
         for r in rows:

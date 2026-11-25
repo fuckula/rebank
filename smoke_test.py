@@ -78,9 +78,10 @@ def main():
         print('FAIL: %d invalid XML files' % len(bad))
         return 1
     for wav in glob.glob(os.path.join(fspro_dir, 'Assets', '**', '*.wav'), recursive=True):
-        if open(wav, 'rb').read(4) != b'RIFF':
-            print('FAIL: non-RIFF wav in Assets: %s' % wav)
-            return 1
+        with open(wav, 'rb') as wf:
+            if wf.read(4) != b'RIFF':
+                print('FAIL: non-RIFF wav in Assets: %s' % wav)
+                return 1
     print('PASS: %d events, XML valid, assets are RIFF wav' % len(events))
 
     if game:
