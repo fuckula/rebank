@@ -118,6 +118,11 @@ Each bank becomes its own `fspro/` project.
 
 ## Starting a mod from scratch
 
+Step-by-step recipes — the complete bank set, split `.bank`/`.assets.bank`
+pairs, rebuilding a bank with ReBank and Studio, changing samples without
+touching the metadata bank, and the mistakes that make the game ignore a mod
+silently — are in [`docs/MODDING_GUIDE.md`](docs/MODDING_GUIDE.md).
+
 The supported base for a new sound mod is Gaijin's official project
 [`fmod_studio_warthunder_for_modders`](https://github.com/GaijinEntertainment/fmod_studio_warthunder_for_modders)
 (FMOD Studio 2.02.22). `rebank init` sets up a workspace around it:

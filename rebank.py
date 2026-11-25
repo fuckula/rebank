@@ -970,8 +970,9 @@ def check_mod(mod_dir, game_dir, studio_blk=None):
         except Exception as e:  # noqa: BLE001
             problems.append('%s: unreadable (%s)' % (name, e))
             continue
-        mine_paths = {strings.get(e) for e in mine if e in strings}
-        their_paths = {strings.get(e) for e in theirs if e in theirs and strings.get(e)}
+        # EVTS also carries snapshots and other non-event entries; only event:/ paths count
+        mine_paths = {strings[e] for e in mine if e in strings and strings[e].startswith('event:/')}
+        their_paths = {strings[e] for e in theirs if e in strings and strings[e].startswith('event:/')}
         lost = their_paths - mine_paths
         extra = mine_paths - their_paths
         if lost:

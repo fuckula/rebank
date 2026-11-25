@@ -89,6 +89,14 @@ class CheckMod(unittest.TestCase):
         ok, report = U.check_mod(self.mod, self.game, studio_blk=BLK)
         self.assertTrue(ok, report)
 
+    def test_non_event_entries_in_evts_are_not_reported(self):
+        # the vanilla EVTS chunk also carries snapshots; they are not events and must not count as lost
+        U.parse_strings_bank = lambda path: {b'\x11' * 16: 'event:/aircraft/gui/test', b'\x22' * 16: 'snapshot:/alarms'}
+        U.parse_bank = lambda path: (None, {b'\x11' * 16: None} if 'mod' in path else {b'\x11' * 16: None, b'\x22' * 16: None}, [], [], [], [])
+        ok, report = U.check_mod(self.mod, self.game)
+        self.assertTrue(ok, report)
+        self.assertNotIn('snapshot', report)
+
     def test_assets_pair_is_checked_without_blk(self):
         # aircraft_gui has an .assets.bank in the game, but the mod ships the metadata half only
         open(os.path.join(self.game, 'extra.bank'), 'wb').write(b'bank:extra')
