@@ -30,9 +30,14 @@ def main():
     game = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else None
     out = tempfile.mkdtemp(prefix='fbu_smoke_')
 
+    # a split-layout bank (X.bank + X.assets.bank) has no strings.bank next to it:
+    # the game folder supplies the dictionary and the paired assets file
     cmd = [sys.executable, TOOL, bank, '--fspro', '-o', out]
+    assets = bank[:-5] + '.assets.bank'
+    if os.path.exists(assets):
+        cmd += ['-a', assets]
     if game:
-        cmd += ['--game', game]
+        cmd += ['--game', game, '-s', os.path.join(game, 'masterbank.strings.bank')]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     print(r.stdout)
     if r.returncode != 0:

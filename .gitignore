@@ -10,3 +10,6 @@ docs/EVENTS.csv
 build/
 dist/
 *.spec
+
+# Agent reasoning notes: local only, never published
+context/
